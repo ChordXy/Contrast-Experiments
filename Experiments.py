@@ -2,15 +2,16 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-03-29 20:53:00
+@LastEditTime: 2020-03-29 21:46:50
 @Description: Do not edit
 '''
 
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
-import Preprocess
+import Load_MNIST
 import datetime
+import sklearn
 import math
 import gc
 import os
@@ -71,40 +72,8 @@ def getGaborFilter(ksize, sigma, theta, lambd, gamma, psi, RI_Part = 'r', ktype 
     else:
         return GauPart * np.cos(cscale * mesh_xr + psi), GauPart * np.sin(cscale * mesh_xr + psi)
 
-#- 显示Gabor滤波器结果
-def DisplayGaborResult(Gabor_Images, figure_row=8, figure_col=16, cmap='gray'):
-    """显示Gabor变换结果
-    
-    Arguments:
-        images {np.array} -- 图像
-    
-    Keyword Arguments:
-        figure_row {int} -- [每一行显示的图像对数] (default: {8})
-        figure_col {int} -- [列数] (default: {16})
-        cmap {str} -- [灰度图] (default: {'gray'})
-    """
-    figure_size = figure_row * figure_col
-    numImages = Gabor_Images.shape[0]
-    numGabor = Gabor_Images.shape[1]
-
-    for figure_NO in range(numImages):
-        #* 绘制新的 figure
-        plt.figure(figure_NO)
-        
-        for i in range(figure_size):
-            plt.subplot(figure_row, figure_col, i + 1)
-            plt.imshow(Gabor_Images[figure_NO, i, :, :], cmap=cmap)
-            
-            #! 关闭坐标轴
-            plt.xticks([])
-            plt.yticks([])
-            plt.axis('off')
-                    
-    plt.show()
-
-
-#- Gabor类
-class GaborNN():
+#- Gabor网络
+class GaborFeature():
     def __init__(self, ksize, Theta, Lambda, Gamma, Beta, RI_Part = 'r', ktype = np.float64):
         """初始化Gabor类
         """
@@ -112,11 +81,14 @@ class GaborNN():
         self.KernelSize = None
         self.ReturnPart = None
         self.KernelType = None
+        self.Train_BN = None
+        self.Test_BN = None
         self.__Gabor_params = []
         self.__Gabor_filter = None
 
         self.setParam(ksize, Theta, Lambda, Gamma, Beta, RI_Part, ktype)
         self.getMNIST()
+        self.generateGaborFeature()
 
     #- 设置Gabor参数
     def setParam(self, ksize, Theta, Lambda, Gamma, Beta, RI_Part = 'r', ktype = np.float64):
@@ -225,11 +197,11 @@ class GaborNN():
                 self.PrintLog("Extracting Features... {}/{}".format(min(i * batchsize, numImages), numImages))
 
                 Selected_Images = Images[i * batchsize : min((i + 1) * batchsize, numImages)]
-                res_conv, res_pool = sess.run([conv, reshaped_maxpool], feed_dict={input_image:Selected_Images, input_filter:self.__Gabor_filter})
+                result_pool = sess.run(reshaped_maxpool, feed_dict={input_image:Selected_Images, input_filter:self.__Gabor_filter})
                 if i == 0:
-                    result = res_conv
+                    result = result_pool
                 else:
-                    result = np.concatenate((result, res_conv), axis=0)
+                    result = np.concatenate((result, result_pool), axis=0)
     
             self.PrintLog("Extracting Features Done!", tsg)
 
@@ -265,21 +237,25 @@ class GaborNN():
         return train_Keep_Normalized, test_Keep_Normalized
 
     #- Gabor网络特征
-    def GaborFeature(self):
-        Train_Feature = self.ExtractGaborFeature(self.Train_X)
-        Test_Feature = self.ExtractGaborFeature(self.Test_X)
+    def generateGaborFeature(self):
+        Train_Feature = self.ExtractGaborFeature(self.Train_X[0:1000])
+        Test_Feature = self.ExtractGaborFeature(self.Test_X[0:1000])
         self.Train_BN, self.Test_BN = self.FeatureReduction(Train_Feature, Test_Feature)
         del Train_Feature, Test_Feature
         gc.collect()
 
-        print(self.Train_BN.shape)
-        print(self.Test_BN.shape)
-
-
     def getMNIST(self):
         """ 获取MNIST图像
         """
-        self.Train_X, self.Train_Y, self.Test_X, self.Test_Y = Preprocess.Preprocess_MNIST_Data("./Datasets/MNIST_Data", True, True)
+        self.Train_X, self.Train_Y, self.Test_X, self.Test_Y = Load_MNIST.Preprocess_MNIST_Data("./Datasets/MNIST_Data", True, True)
+
+    @property
+    def GaborTrainFeature(self):
+        return self.Train_BN
+
+    @property
+    def GaborTestFeature(self):
+        return self.Test_BN
 
     @property
     def numGaborFilters(self):
@@ -317,6 +293,22 @@ class GaborNN():
         
         return nowTime
 
+class AEFeature():
+    def __init__():
+        pass
+
+def ClassifierSVM():
+    pass
+
+def ClassifierMLP():
+    pass
+
+def DimensionReduction():
+    pass
+
+def ClassifierKMeans():
+    pass
+
 
 if __name__ == "__main__":
     ksize = (11, 11)
@@ -326,8 +318,4 @@ if __name__ == "__main__":
     Beta = [1]
     Gamma = [0.5, 1]
 
-    GaborNeuralNetwork = GaborNN(ksize, Theta, Lambda, Gamma, Beta, 'b')
-    GaborNeuralNetwork.GaborFeature()
-    # print(result.shape)
-    # result = result[0:1].transpose(0, 3, 1, 2)
-    # DisplayGaborResult(result)
+    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b')
