@@ -2,10 +2,13 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-03-29 21:46:50
+@LastEditTime: 2020-03-30 16:44:50
 @Description: Do not edit
 '''
 
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
@@ -74,7 +77,7 @@ def getGaborFilter(ksize, sigma, theta, lambd, gamma, psi, RI_Part = 'r', ktype 
 
 #- Gabor网络
 class GaborFeature():
-    def __init__(self, ksize, Theta, Lambda, Gamma, Beta, RI_Part = 'r', ktype = np.float64):
+    def __init__(self, ksize, Theta, Lambda, Gamma, Beta, RI_Part = 'r', ktype = np.float64, pool_result_size = 2):
         """初始化Gabor类
         """
         #- 初始化参数
@@ -85,6 +88,7 @@ class GaborFeature():
         self.Test_BN = None
         self.__Gabor_params = []
         self.__Gabor_filter = None
+        self.pool_size = pool_result_size
 
         self.setParam(ksize, Theta, Lambda, Gamma, Beta, RI_Part, ktype)
         self.getMNIST()
@@ -157,7 +161,7 @@ class GaborFeature():
         self.PrintLog("Generating Gabor Filters Done!")
 
     #- 提取Gabor特征
-    def ExtractGaborFeature(self, Images, batchsize=500, pool_result_size = 2, method='SAME'):
+    def ExtractGaborFeature(self, Images, batchsize=500, method='SAME'):
         """利用生成的Gabor滤波器组对图像进行卷积
         
         Arguments:
@@ -186,8 +190,8 @@ class GaborFeature():
         input_filter = tf.placeholder(tf.float32, [Krows, Kcols, kChannel, numKernels])
 
         conv = tf.nn.conv2d(input_image, input_filter, [1, 1, 1, 1], method)
-        maxpool = tf.nn.max_pool(conv, [1, 28 // pool_result_size, 28 // pool_result_size, 1], [1, 28 // pool_result_size, 28 // pool_result_size, 1], 'VALID')
-        reshaped_maxpool = tf.reshape(maxpool, [batchsize, pool_result_size * pool_result_size * 128])
+        maxpool = tf.nn.max_pool(conv, [1, 28 // self.pool_size, 28 // self.pool_size, 1], [1, 28 // self.pool_size, 28 // self.pool_size, 1], 'VALID')
+        reshaped_maxpool = tf.reshape(maxpool, [batchsize, self.pool_size * self.pool_size * 128])
 
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
@@ -294,20 +298,47 @@ class GaborFeature():
         return nowTime
 
 class AEFeature():
-    def __init__():
+    def __init__(self):
         pass
 
-def ClassifierSVM():
-    pass
+def ClassifierSVM(train_x, train_y, test_x, test_y, kernel = 'rbf'):
+    from sklearn.svm import SVC
+    clf = SVC(kernel='rbf').fit(train_x, train_y)
 
 def ClassifierMLP():
     pass
 
-def DimensionReduction():
-    pass
+def DimensionReduction(data, Targeted_Dimension = 2, method = 0):
+    if method == 0:
+        Reduced_Data = PCA(n_components=Targeted_Dimension).fit_transform(data)
+    else:
+        Reduced_Data = TSNE(n_components=Targeted_Dimension).fit_transform(data)
+    return Reduced_Data
 
-def ClassifierKMeans():
-    pass
+def ClassifierKMeans(data, n_class = 10):
+    estimator = KMeans(n_clusters=n_class)
+    estimator.fit(data)
+
+
+#- 测试函数
+def TestCluster():
+    from mpl_toolkits.mplot3d import Axes3D
+
+    n_samples = 1000
+    data_1 = 10 * np.ones([n_samples, 3]) + np.random.uniform(0, 1, [n_samples, 3])
+    data_2 = -10 * np.ones([n_samples, 3]) + np.random.uniform(0, 2, [n_samples, 3])
+    data_3 = 30 * np.ones([n_samples, 3]) + np.random.uniform(0, 1.5, [n_samples, 3])
+    data_4 = 50 * np.ones([n_samples, 3]) + np.random.uniform(0, 2.5, [n_samples, 3])
+    data = np.concatenate([data_1, data_2, data_3, data_4])
+
+    fig = plt.figure(1)
+    ax = plt.axes(projection='3d')
+    ax.scatter(data[:, 0], data[:, 1], data[:, 2], marker='o')
+
+    X_Reduced = DimensionReduction(data, 2, 1)
+    fig = plt.figure(2)
+    plt.scatter(X_Reduced[:, 0], X_Reduced[:, 1], marker='o')
+    plt.show()
 
 
 if __name__ == "__main__":
@@ -318,4 +349,7 @@ if __name__ == "__main__":
     Beta = [1]
     Gamma = [0.5, 1]
 
-    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b')
+    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b')
+
+    
+    TestCluster()
