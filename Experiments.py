@@ -2,10 +2,11 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-03-31 10:52:16
+@LastEditTime: 2020-03-31 21:24:01
 @Description: Do not edit
 '''
 
+from tensorflow.contrib.layers import xavier_initializer
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
@@ -20,7 +21,7 @@ import gc
 import os
 
 
-def PrintLog(self, message, diff_logTime=None):
+def PrintLog(message, diff_logTime=None):
     """打印Log信息
     
     Arguments:
@@ -263,8 +264,8 @@ class GaborFeature():
 
     #- Gabor网络特征
     def generateGaborFeature(self):
-        Train_Feature = self.ExtractGaborFeature(self.Train_X[0:1000])
-        Test_Feature = self.ExtractGaborFeature(self.Test_X[0:1000])
+        Train_Feature = self.ExtractGaborFeature(self.Train_X, 5000)
+        Test_Feature = self.ExtractGaborFeature(self.Test_X, 5000)
         self.Train_BN, self.Test_BN = self.FeatureReduction(Train_Feature, Test_Feature)
         del Train_Feature, Test_Feature
         gc.collect()
@@ -330,18 +331,156 @@ class GaborFeature():
         
         return nowTime
 
-class AEFeature():
+class DAEFeature():
     def __init__(self):
-        pass
+        self.getMNIST()
+        self.generateDAEFeature()
+
+    def EncoderLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """编码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Encoder_Layer') as scope_encoder:
+            weight = tf.get_variable('Encoder_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Encoder_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        encoder_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return encoder_layer
+    
+    def DecoderLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """解码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Decoder_Layer') as scope_decoder:
+            weight = tf.get_variable('Decoder_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Decoder_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        decoder_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return decoder_layer
+    
+    def generateDAEFeature(self):
+        #* 高斯噪声
+        gaussian = 0.02
+        self.numPixels = 28 * 28
+        self.numSamples = self.Train_X.shape[0]
+        ############################  初始化参数  ############################
+        training_epochs = 100
+        batch_size = 200
+        total_batch = math.ceil(self.numSamples / batch_size)
+        learning_rate_dacay_init = 1e-3
+        learning_rate_decay_steps = total_batch * 4
+        learning_rate_decay_rates = 0.98
+
+        ############################  初始化网络输入  ############################
+        tf.reset_default_graph()
+        input_Main = tf.placeholder(tf.float32, [None, self.numPixels])
+        global_step = tf.Variable(0, trainable=False)
+        learning_rate = tf.train.exponential_decay( learning_rate=learning_rate_dacay_init, 
+                                                    global_step=global_step, 
+                                                    decay_steps=learning_rate_decay_steps, 
+                                                    decay_rate=learning_rate_decay_rates)
+ 
+        ############################  构建网络  ############################
+        n_Hiddens = 1024
+        encoder_layer = self.EncoderLayer(input_Main, self.numPixels, n_Hiddens, tf.nn.leaky_relu)
+        decoder_layer = self.DecoderLayer(encoder_layer, n_Hiddens, self.numPixels, tf.nn.leaky_relu)
+
+        #* 重建损失
+        loss = tf.reduce_mean(tf.pow(tf.subtract(input_Main, decoder_layer), 2.0))
+
+        #* 优化函数
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+
+        ############################  初始化参数  ############################
+        display_step = 1
+        saver = tf.train.Saver()
+        model_path = './log/AE.ckpt'
+
+        ############################  训练网络  ############################
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            for epoch in range(training_epochs):
+                avg_loss = 0
+                for i in range(total_batch):
+                    batch_main = self.Train_X[i * batch_size : min((i + 1) * batch_size, self.numSamples), :]
+                    batch_main_noise = batch_main + gaussian * np.random.randn(min(batch_size, self.numSamples - i * batch_size), self.numPixels)
+                    _, ls = sess.run([optimizer, loss], feed_dict={input_Main : batch_main_noise})
+                    avg_loss += ls / total_batch
+                        
+                if (epoch + 1) % display_step == 0:
+                    message = "Epoch : " + '%04d' % (epoch + 1) + " loss = " + "{:.9f}".format(avg_loss)
+                    PrintLog(message)
+            
+            saver.save(sess, model_path, global_step = epoch)
+
+            print("Finished!")
+            self.ae_train_feature = sess.run(encoder_layer, feed_dict={input_Main : self.Train_X})
+            self.ae_test_feature = sess.run(encoder_layer, feed_dict={input_Main : self.Test_X})
+            print("Features are READY!!!")
+
+    def getMNIST(self):
+        """ 获取MNIST图像
+        """
+        self.Train_X, self.Train_Y, self.Test_X, self.Test_Y = Load_MNIST.Preprocess_MNIST_Data("./Datasets/MNIST_Data", True, True)
+        self.Train_X = np.reshape(self.Train_X, [self.Train_X.shape[0], 28 * 28])
+        self.Test_X = np.reshape(self.Test_X, [self.Test_X.shape[0], 28 * 28])
+        
+    @property
+    def DAETrainFeature(self):
+        return self.ae_train_feature
+
+    @property
+    def DAETrainLabel(self):
+        return self.Train_Y
+
+    @property
+    def DAETestFeature(self):
+        return self.ae_test_feature
+
+    @property
+    def DAETestLabel(self):
+        return self.Test_Y
+
+    @property
+    def DAEResult(self):
+        return self.ae_train_feature, self.Train_Y, self.ae_test_feature, self.Test_Y
+
 
 def ClassifierSVM(train_x, train_y, test_x, test_y):
     from sklearn.svm import SVC
+    
+    label_train = [np.argmax(sample) for sample in train_y]
+    label_test = [np.argmax(sample) for sample in test_y]
     cls = SVC(kernel='rbf')
-    cls.fit(train_x, train_y)
-    return cls.score(test_x, test_y)
+    cls.fit(train_x, label_train)
+    Acc = cls.score(test_x, label_test)
+    print("******************************************************")
+    print("SVM Accuracy : {:5}% \r\n".format(Acc * 100))
+    print("******************************************************")
+    return Acc
 
 def ClassifierMLP(train_x, train_y, test_x, test_y):
-    def HiddenFullyConnectedLayer(self, Input_Layer, Input_Size, Output_Size, Activation, Dropout, isTrainable=True):
+    def HiddenFullyConnectedLayer(Input_Layer, Input_Size, Output_Size, Activation, Dropout, isTrainable=True):
         """分类全链接层
         
         Arguments:
@@ -363,7 +502,7 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
         hidden_layer_dropout = tf.nn.dropout(hidden_layer, Dropout)
         return hidden_layer_dropout
 
-    def SoftmaxClassifyLayer(self, Input_Layer, Input_Size, Output_Size, isTrainable=True):
+    def SoftmaxClassifyLayer(Input_Layer, Input_Size, Output_Size, isTrainable=True):
         """Softmax分类层
         
         Arguments:
@@ -388,8 +527,8 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
     numTrain = train_x.shape[0]
     total_batch = math.ceil(numTrain / batch_size)
     gaussian = 0.02
-    learning_rate_dacay_init = 1e-4
-    learning_rate_decay_steps = total_batch * 2
+    learning_rate_dacay_init = 1e-5
+    learning_rate_decay_steps = total_batch
     learning_rate_decay_rates = 0.95
 
     ############################  初始化网络输入  ############################
@@ -417,7 +556,8 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
     loss = tf.reduce_mean(- tf.reduce_sum(y * tf.log(pred), reduction_indices = 1))
  
     #* 优化函数
-    optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+    # optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+    optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=global_step)
 
     #* 训练集测试函数
     correction_prediction = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1))
@@ -442,19 +582,16 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
                 avg_loss += ls / total_batch
 
             if (epoch + 1) % display_step == 0:
-                acc = accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 0.5})
                 f_acc = accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.})
                 learn_rate = sess.run(learning_rate)
                 message = "Epoch : " + '%04d' % (epoch + 1) + \
                         " Learning Rate = " + "{:.9f}".format(learn_rate) + \
-                        " Training loss = " + "{:.9f}".format(avg_loss) + \
-                        " Test Accuracy = " + "{:.9f}".format(acc) + \
                         " Final Accuracy = " + "{:.9f}".format(f_acc)
 
                 PrintLog(message)
-            print("Finished!")
-            #* 测试集结果
-            print("Testing Accuracy : ", accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.}))
+        print("Finished!")
+        #* 测试集结果
+        print("Testing Accuracy : ", accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.}))
 
 def DimensionReduction(data, Targeted_Dimension = 2, method = 0):
     if method == 0:
@@ -497,7 +634,10 @@ if __name__ == "__main__":
     Beta = [1]
     Gamma = [0.5, 1]
 
-    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b')
+    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
+    # ClassifierSVM(*GaborFeatures.GaborResult)
+    # ClassifierMLP(*GaborFeatures.GaborResult)
 
-    ClassifierSVM(GaborFeatures.GaborResult)
-    # ClassifierMLP(GaborFeatures.GaborResult)
+    DAEFeatures = DAEFeature()
+    # ClassifierSVM(*DAEFeatures.DAEResult)
+    ClassifierMLP(*DAEFeatures.DAEResult)
