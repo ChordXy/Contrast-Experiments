@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-03-30 16:44:50
+@LastEditTime: 2020-03-31 10:52:16
 @Description: Do not edit
 '''
 
@@ -19,6 +19,27 @@ import math
 import gc
 import os
 
+
+def PrintLog(self, message, diff_logTime=None):
+    """打印Log信息
+    
+    Arguments:
+        message {str} -- 要显示的信息
+        
+    Keyword Arguments:
+        diff_logTime {datetime.datetime} -- 需要计算时间差的变量 (default: {None})
+    
+    Returns:
+        datetime.datetime -- 当前的时间信息
+    """
+    nowTime = datetime.datetime.now()
+    msg = "[" + nowTime.strftime('%Y-%m-%d %H:%M:%S.%f') + "] " + message
+    print(msg)
+    if isinstance(diff_logTime, datetime.datetime):
+        diff_time = str((nowTime - diff_logTime).total_seconds())
+        msg = "[" + nowTime.strftime('%Y-%m-%d %H:%M:%S.%f') + "] Time consumption : " + diff_time + ' s'
+        print(msg)
+    return nowTime
 
 #- 获取Gabor滤波器
 def getGaborFilter(ksize, sigma, theta, lambd, gamma, psi, RI_Part = 'r', ktype = np.float64):
@@ -258,8 +279,20 @@ class GaborFeature():
         return self.Train_BN
 
     @property
+    def GaborTrainLabel(self):
+        return self.Train_Y
+
+    @property
     def GaborTestFeature(self):
         return self.Test_BN
+
+    @property
+    def GaborTestLabel(self):
+        return self.Test_Y
+
+    @property
+    def GaborResult(self):
+        return self.Train_BN, self.Train_Y, self.Test_BN, self.Test_Y
 
     @property
     def numGaborFilters(self):
@@ -301,12 +334,127 @@ class AEFeature():
     def __init__(self):
         pass
 
-def ClassifierSVM(train_x, train_y, test_x, test_y, kernel = 'rbf'):
+def ClassifierSVM(train_x, train_y, test_x, test_y):
     from sklearn.svm import SVC
-    clf = SVC(kernel='rbf').fit(train_x, train_y)
+    cls = SVC(kernel='rbf')
+    cls.fit(train_x, train_y)
+    return cls.score(test_x, test_y)
 
-def ClassifierMLP():
-    pass
+def ClassifierMLP(train_x, train_y, test_x, test_y):
+    def HiddenFullyConnectedLayer(self, Input_Layer, Input_Size, Output_Size, Activation, Dropout, isTrainable=True):
+        """分类全链接层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('hidden_Layer', reuse=tf.AUTO_REUSE) as scope_hidden:
+            weight = tf.get_variable('Hidden_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Hidden_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        hidden_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        hidden_layer_dropout = tf.nn.dropout(hidden_layer, Dropout)
+        return hidden_layer_dropout
+
+    def SoftmaxClassifyLayer(self, Input_Layer, Input_Size, Output_Size, isTrainable=True):
+        """Softmax分类层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('softmax_Layer', reuse=tf.AUTO_REUSE) as scope_softmax:
+            weight = tf.get_variable('Softmax_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Softmax_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        softmax_layer = tf.nn.softmax(tf.matmul(Input_Layer, weight) + bias)
+        return softmax_layer
+
+    training_epochs = 200
+    batch_size = 200
+    numTrain = train_x.shape[0]
+    total_batch = math.ceil(numTrain / batch_size)
+    gaussian = 0.02
+    learning_rate_dacay_init = 1e-4
+    learning_rate_decay_steps = total_batch * 2
+    learning_rate_decay_rates = 0.95
+
+    ############################  初始化网络输入  ############################
+    tf.reset_default_graph()
+    n_features = train_x.shape[1]
+    n_class = train_y.shape[1]
+    input_Feature = tf.placeholder(tf.float32, [None, n_features])
+    y = tf.placeholder(tf.float32, [None, n_class])
+    dropout_keep_prob = tf.placeholder("float")
+    global_step = tf.Variable(0, trainable=False)
+    learning_rate = tf.train.exponential_decay( learning_rate=learning_rate_dacay_init, 
+                                                global_step=global_step, 
+                                                decay_steps=learning_rate_decay_steps, 
+                                                decay_rate=learning_rate_decay_rates)
+ 
+    ############################  构建网络  ############################
+    n_Hiddens = 2048
+        
+    #* 隐含层
+    hidden_layer = HiddenFullyConnectedLayer(input_Feature, n_features, n_Hiddens, tf.nn.leaky_relu, dropout_keep_prob)
+    #* 分类层
+    pred = SoftmaxClassifyLayer(hidden_layer, n_Hiddens, n_class)
+
+    #* 最终损失
+    loss = tf.reduce_mean(- tf.reduce_sum(y * tf.log(pred), reduction_indices = 1))
+ 
+    #* 优化函数
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+
+    #* 训练集测试函数
+    correction_prediction = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1))
+    accuracy = tf.reduce_mean(tf.cast(correction_prediction, tf.float32))
+
+    ############################  初始化参数  ############################
+    display_step = 1
+        
+    ############################  训练网络  ############################
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        for epoch in range(training_epochs):
+            avg_loss = 0
+            for i in range(total_batch):
+                #* 提取每个Batch对应的数据
+                batch_xs = train_x[i * batch_size : min((i + 1) * batch_size, numTrain), :]
+                batch_ys = train_y[i * batch_size : min((i + 1) * batch_size, numTrain), :]
+                #* 加入噪声
+                batch_xs_noise = batch_xs + gaussian * np.random.randn(min(batch_size, numTrain - i * batch_size), n_features)
+                #* 训练网络
+                _, ls = sess.run([optimizer, loss], feed_dict={input_Feature : batch_xs_noise, y : batch_ys, dropout_keep_prob : 0.5})
+                avg_loss += ls / total_batch
+
+            if (epoch + 1) % display_step == 0:
+                acc = accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 0.5})
+                f_acc = accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.})
+                learn_rate = sess.run(learning_rate)
+                message = "Epoch : " + '%04d' % (epoch + 1) + \
+                        " Learning Rate = " + "{:.9f}".format(learn_rate) + \
+                        " Training loss = " + "{:.9f}".format(avg_loss) + \
+                        " Test Accuracy = " + "{:.9f}".format(acc) + \
+                        " Final Accuracy = " + "{:.9f}".format(f_acc)
+
+                PrintLog(message)
+            print("Finished!")
+            #* 测试集结果
+            print("Testing Accuracy : ", accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.}))
 
 def DimensionReduction(data, Targeted_Dimension = 2, method = 0):
     if method == 0:
@@ -349,7 +497,7 @@ if __name__ == "__main__":
     Beta = [1]
     Gamma = [0.5, 1]
 
-    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b')
+    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b')
 
-    
-    TestCluster()
+    ClassifierSVM(GaborFeatures.GaborResult)
+    # ClassifierMLP(GaborFeatures.GaborResult)
