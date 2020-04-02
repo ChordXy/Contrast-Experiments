@@ -2,11 +2,12 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-02 14:49:18
+@LastEditTime: 2020-04-02 21:38:29
 @Description: Do not edit
 '''
 
 from tensorflow.contrib.layers import xavier_initializer
+from tensorflow.contrib.factorization import KMeans
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
@@ -331,6 +332,7 @@ class GaborFeature():
         
         return nowTime
 
+#- DAE网络
 class DAEFeature():
     def __init__(self):
         self.getMNIST()
@@ -465,7 +467,7 @@ class DAEFeature():
     def DAEResult(self):
         return self.ae_train_feature, self.Train_Y, self.ae_test_feature, self.Test_Y
 
-
+#- 监督学习：SVM分类器
 def ClassifierSVM(train_x, train_y, test_x, test_y):
     from sklearn.svm import SVC
     
@@ -479,6 +481,7 @@ def ClassifierSVM(train_x, train_y, test_x, test_y):
     print("******************************************************")
     return Acc
 
+#- 监督学习：MLP分类器
 def ClassifierMLP(train_x, train_y, test_x, test_y):
     def HiddenFullyConnectedLayer(Input_Layer, Input_Size, Output_Size, Activation, Dropout, isTrainable=True):
         """分类全链接层
@@ -595,6 +598,7 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
         #* 测试集结果
         print("Testing Accuracy : ", accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.}))
 
+#- 降维
 def DimensionReduction(data, Targeted_Dimension = 2, method = 0):
     if method == 0:
         Reduced_Data = PCA(n_components=Targeted_Dimension).fit_transform(data)
@@ -602,9 +606,76 @@ def DimensionReduction(data, Targeted_Dimension = 2, method = 0):
         Reduced_Data = TSNE(n_components=Targeted_Dimension).fit_transform(data)
     return Reduced_Data
 
+#- 无监督学习：k均值CPU
 def ClassifierKMeans(data, n_class = 10):
     estimator = KMeans(n_clusters=n_class)
     estimator.fit(data)
+
+#- 无监督学习：k均值GPU
+def ClassifierKMeansGPU(data, n_class = 10):
+    num_steps = 50 # 训练次数
+    batch_size = 1024 # 每一批的样本数
+    k = 25 # clusters的数量
+    num_classes = 10 # 10分类
+    num_features = 784 # 每张图片是28*28
+
+    X = tf.placeholder(tf.float32, shape=[None, num_features])
+    # Labels (将标签分配给质心并用于测试)
+    Y = tf.placeholder(tf.float32, shape=[None, num_classes])
+
+    # K-Means 的参数
+    kmeans = KMeans(inputs=X, num_clusters=k, distance_metric='cosine',
+                    use_mini_batch=True)
+
+    # 创建 KMeans 模型
+    training_graph = kmeans.training_graph()
+
+    if len(training_graph) > 6:
+        (all_scores, cluster_idx, scores, cluster_centers_initialized,
+        cluster_centers_var, init_op, train_op) = training_graph
+    else:
+        (all_scores, cluster_idx, scores, cluster_centers_initialized,
+        init_op, train_op) = training_graph
+
+    cluster_idx = cluster_idx[0]
+    avg_distance = tf.reduce_mean(scores)
+
+    # 初始化变量 (用默认值)
+    init_vars = tf.global_variables_initializer()
+
+
+    sess = tf.Session()
+    sess.run(init_vars, feed_dict={X: full_data_x})
+    sess.run(init_op, feed_dict={X: full_data_x})
+
+    # 训练
+    for i in range(1, num_steps + 1):
+        _, d, idx = sess.run([train_op, avg_distance, cluster_idx],
+                            feed_dict={X: full_data_x})
+        if i % 10 == 0 or i == 1:
+            print("Step %i, Avg Distance: %f" % (i, d))
+
+    # 为每个质心分配标签
+    # 使用每次训练的标签计算每个质心的标签总数
+    # 计算样本到最近的质心
+    counts = np.zeros(shape=(k, num_classes))
+    for i in range(len(idx)):
+        counts[idx[i]] += mnist.train.labels[i]
+    # 将最频繁的标签分配给质心
+    labels_map = [np.argmax(c) for c in counts]
+    labels_map = tf.convert_to_tensor(labels_map)
+
+    # 评估
+    #  查找：centroid_id 的标签
+    cluster_label = tf.nn.embedding_lookup(labels_map, cluster_idx)
+    # 计算准确路
+    correct_prediction = tf.equal(cluster_label, tf.cast(tf.argmax(Y, 1), tf.int32))
+    accuracy_op = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+
+    # 测试模型
+    test_x, test_y = mnist.test.images, mnist.test.labels
+    print("Test Accuracy:", sess.run(accuracy_op, feed_dict={X: test_x, Y: test_y}))
+
 
 
 #- 测试函数
