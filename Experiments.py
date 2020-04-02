@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-02 21:38:29
+@LastEditTime: 2020-04-02 23:00:53
 @Description: Do not edit
 '''
 
@@ -612,22 +612,26 @@ def ClassifierKMeans(data, n_class = 10):
     estimator.fit(data)
 
 #- 无监督学习：k均值GPU
-def ClassifierKMeansGPU(data, n_class = 10):
-    num_steps = 50 # 训练次数
-    batch_size = 1024 # 每一批的样本数
-    k = 25 # clusters的数量
-    num_classes = 10 # 10分类
-    num_features = 784 # 每张图片是28*28
+def ClassifierKMeansGPU(data, n_class = 10, Cluster_Centers = 25):
+    ################################### 参数初始化 ###################################
+    # 训练次数
+    epochs = 50
+    # 每一批的样本数
+    batch_size = 1024
+    # 特征数
+    num_features = data.shape[1]
+    # 显示步长
+    display_epoch = 1
 
+    ################################### 网络参数 ###################################
     X = tf.placeholder(tf.float32, shape=[None, num_features])
-    # Labels (将标签分配给质心并用于测试)
-    Y = tf.placeholder(tf.float32, shape=[None, num_classes])
+    Y = tf.placeholder(tf.float32, shape=[None, n_class])
 
-    # K-Means 的参数
-    kmeans = KMeans(inputs=X, num_clusters=k, distance_metric='cosine',
+    # 创建 K-Means模型
+    kmeans = KMeans(inputs=X,
+                    num_clusters=Cluster_Centers, 
+                    distance_metric='cosine',
                     use_mini_batch=True)
-
-    # 创建 KMeans 模型
     training_graph = kmeans.training_graph()
 
     if len(training_graph) > 6:
@@ -640,25 +644,20 @@ def ClassifierKMeansGPU(data, n_class = 10):
     cluster_idx = cluster_idx[0]
     avg_distance = tf.reduce_mean(scores)
 
-    # 初始化变量 (用默认值)
-    init_vars = tf.global_variables_initializer()
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        sess.run(init_op, feed_dict={X: data})
 
+        # 训练
+        for i in range(epochs):
+            _, d, idx = sess.run([train_op, avg_distance, cluster_idx], feed_dict={X: data})
+            if (i + 1) % display_epoch == 0:
+                PrintLog("Step %i, Avg Distance: %f" % (i + 1, d))
 
-    sess = tf.Session()
-    sess.run(init_vars, feed_dict={X: full_data_x})
-    sess.run(init_op, feed_dict={X: full_data_x})
-
-    # 训练
-    for i in range(1, num_steps + 1):
-        _, d, idx = sess.run([train_op, avg_distance, cluster_idx],
-                            feed_dict={X: full_data_x})
-        if i % 10 == 0 or i == 1:
-            print("Step %i, Avg Distance: %f" % (i, d))
-
-    # 为每个质心分配标签
-    # 使用每次训练的标签计算每个质心的标签总数
-    # 计算样本到最近的质心
-    counts = np.zeros(shape=(k, num_classes))
+    #* 为每个质心分配标签
+    #* 使用每次训练的标签计算每个质心的标签总数
+    #* 计算样本到最近的质心
+    counts = np.zeros(shape=(Cluster_Centers, n_class))
     for i in range(len(idx)):
         counts[idx[i]] += mnist.train.labels[i]
     # 将最频繁的标签分配给质心
