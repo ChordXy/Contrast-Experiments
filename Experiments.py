@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-03-31 21:24:01
+@LastEditTime: 2020-04-02 14:49:18
 @Description: Do not edit
 '''
 
@@ -527,9 +527,9 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
     numTrain = train_x.shape[0]
     total_batch = math.ceil(numTrain / batch_size)
     gaussian = 0.02
-    learning_rate_dacay_init = 1e-5
-    learning_rate_decay_steps = total_batch
-    learning_rate_decay_rates = 0.95
+    learning_rate_dacay_init = 5e-5
+    learning_rate_decay_steps = total_batch * 2
+    learning_rate_decay_rates = 0.9
 
     ############################  初始化网络输入  ############################
     tf.reset_default_graph()
@@ -553,11 +553,12 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
     pred = SoftmaxClassifyLayer(hidden_layer, n_Hiddens, n_class)
 
     #* 最终损失
-    loss = tf.reduce_mean(- tf.reduce_sum(y * tf.log(pred), reduction_indices = 1))
+    loss = tf.reduce_mean(- tf.reduce_sum(y * tf.log(pred + 1e-5), reduction_indices = 1))
  
     #* 优化函数
     # optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
-    optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=global_step)
+    # optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=global_step)
+    optimizer = tf.train.RMSPropOptimizer(learning_rate).minimize(loss, global_step=global_step)
 
     #* 训练集测试函数
     correction_prediction = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1))
@@ -585,6 +586,7 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
                 f_acc = accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.})
                 learn_rate = sess.run(learning_rate)
                 message = "Epoch : " + '%04d' % (epoch + 1) + \
+                        " Loss = " + "{:.9f}".format(avg_loss) + \
                         " Learning Rate = " + "{:.9f}".format(learn_rate) + \
                         " Final Accuracy = " + "{:.9f}".format(f_acc)
 
@@ -634,10 +636,10 @@ if __name__ == "__main__":
     Beta = [1]
     Gamma = [0.5, 1]
 
-    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
+    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
     # ClassifierSVM(*GaborFeatures.GaborResult)
-    # ClassifierMLP(*GaborFeatures.GaborResult)
+    ClassifierMLP(*GaborFeatures.GaborResult)
 
-    DAEFeatures = DAEFeature()
+    # DAEFeatures = DAEFeature()
     # ClassifierSVM(*DAEFeatures.DAEResult)
-    ClassifierMLP(*DAEFeatures.DAEResult)
+    # ClassifierMLP(*DAEFeatures.DAEResult)
