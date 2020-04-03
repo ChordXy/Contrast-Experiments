@@ -2,12 +2,12 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-02 23:00:53
+@LastEditTime: 2020-04-03 20:33:48
 @Description: Do not edit
 '''
 
 from tensorflow.contrib.layers import xavier_initializer
-from tensorflow.contrib.factorization import KMeans
+from tensorflow.contrib import factorization
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.manifold import TSNE
@@ -612,68 +612,56 @@ def ClassifierKMeans(data, n_class = 10):
     estimator.fit(data)
 
 #- 无监督学习：k均值GPU
-def ClassifierKMeansGPU(data, n_class = 10, Cluster_Centers = 25):
+def ClassifierKMeansKNN(data, Cluster_Centers = 25, Targeted_Dimension = 2, method = 0):
+    ################################### 数据降维 ###################################
+    Train_X = DimensionReduction(data[0], Targeted_Dimension, method)
+    Train_Y = data[1]
+    Test_X = DimensionReduction(data[2], Targeted_Dimension, method)
+    Test_Y = data[3]
     ################################### 参数初始化 ###################################
     # 训练次数
-    epochs = 50
+    epochs = 300
     # 每一批的样本数
     batch_size = 1024
     # 特征数
-    num_features = data.shape[1]
+    num_features = Train_X.shape[1]
     # 显示步长
-    display_epoch = 1
+    display_epoch = 5
+    # 类别数
+    n_class = 10
 
     ################################### 网络参数 ###################################
     X = tf.placeholder(tf.float32, shape=[None, num_features])
     Y = tf.placeholder(tf.float32, shape=[None, n_class])
 
     # 创建 K-Means模型
-    kmeans = KMeans(inputs=X,
-                    num_clusters=Cluster_Centers, 
-                    distance_metric='cosine',
-                    use_mini_batch=True)
-    training_graph = kmeans.training_graph()
-
-    if len(training_graph) > 6:
-        (all_scores, cluster_idx, scores, cluster_centers_initialized,
-        cluster_centers_var, init_op, train_op) = training_graph
-    else:
-        (all_scores, cluster_idx, scores, cluster_centers_initialized,
-        init_op, train_op) = training_graph
-
+    _, cluster_idx, scores, _, init_op, train_op = factorization.KMeans(inputs=X, num_clusters=Cluster_Centers, distance_metric='cosine', use_mini_batch=True).training_graph()
     cluster_idx = cluster_idx[0]
     avg_distance = tf.reduce_mean(scores)
 
+    ################################### 训练网络 ###################################
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        sess.run(init_op, feed_dict={X: data})
+        sess.run(init_op, feed_dict={X: Train_X})
 
-        # 训练
+        #* 聚类
         for i in range(epochs):
-            _, d, idx = sess.run([train_op, avg_distance, cluster_idx], feed_dict={X: data})
+            _, d, idx = sess.run([train_op, avg_distance, cluster_idx], feed_dict={X: Train_X})
             if (i + 1) % display_epoch == 0:
                 PrintLog("Step %i, Avg Distance: %f" % (i + 1, d))
 
-    #* 为每个质心分配标签
-    #* 使用每次训练的标签计算每个质心的标签总数
-    #* 计算样本到最近的质心
-    counts = np.zeros(shape=(Cluster_Centers, n_class))
-    for i in range(len(idx)):
-        counts[idx[i]] += mnist.train.labels[i]
-    # 将最频繁的标签分配给质心
-    labels_map = [np.argmax(c) for c in counts]
-    labels_map = tf.convert_to_tensor(labels_map)
+        #* KNN投票
+        counts = np.zeros(shape=(Cluster_Centers, n_class))
+        for i in range(len(idx)):
+            counts[idx[i]] += Train_Y[i]
+        labels_map = tf.convert_to_tensor([np.argmax(c) for c in counts])
 
-    # 评估
-    #  查找：centroid_id 的标签
-    cluster_label = tf.nn.embedding_lookup(labels_map, cluster_idx)
-    # 计算准确路
-    correct_prediction = tf.equal(cluster_label, tf.cast(tf.argmax(Y, 1), tf.int32))
-    accuracy_op = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+        #* 建立评测网络
+        cluster_label = tf.nn.embedding_lookup(labels_map, cluster_idx)
+        correct_prediction = tf.equal(cluster_label, tf.cast(tf.argmax(Y, 1), tf.int32))
+        accuracy_op = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-    # 测试模型
-    test_x, test_y = mnist.test.images, mnist.test.labels
-    print("Test Accuracy:", sess.run(accuracy_op, feed_dict={X: test_x, Y: test_y}))
+        print("Test Accuracy:", sess.run(accuracy_op, feed_dict={X: Test_X, Y: Test_Y}))
 
 
 
@@ -706,10 +694,18 @@ if __name__ == "__main__":
     Beta = [1]
     Gamma = [0.5, 1]
 
-    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
+    #- Supervised Learning
+    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
     # ClassifierSVM(*GaborFeatures.GaborResult)
-    ClassifierMLP(*GaborFeatures.GaborResult)
+    # ClassifierMLP(*GaborFeatures.GaborResult)
 
     # DAEFeatures = DAEFeature()
     # ClassifierSVM(*DAEFeatures.DAEResult)
     # ClassifierMLP(*DAEFeatures.DAEResult)
+
+    #- Unsupervised Learning
+    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
+    ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, 32, 1)
+
+    # DAEFeatures = DAEFeature()
+    # ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, 2)
