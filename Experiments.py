@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-03 20:33:48
+@LastEditTime: 2020-04-04 10:48:22
 @Description: Do not edit
 '''
 
@@ -97,6 +97,714 @@ def getGaborFilter(ksize, sigma, theta, lambd, gamma, psi, RI_Part = 'r', ktype 
         return GauPart * np.sin(cscale * mesh_xr + psi)
     else:
         return GauPart * np.cos(cscale * mesh_xr + psi), GauPart * np.sin(cscale * mesh_xr + psi)
+
+#- MRAE网络
+class MRAEFeature():
+    def __init__(self):
+        self.InitParameters()
+        self.GaborMNIST(False, 5000, None, None)
+        self.CaptureBlocks(False, None)
+        self.Build_TiedAutoEncoderNetwork()
+        self.generateMRAEFeature()
+
+    #@ 参数初始化
+    def InitParameters(self):
+        #- 读取MNIST图像
+        #* 输入图像大小
+        self.ImageSize = (28, 28)
+        #* 类别数
+        self.n_class = 10
+        #* 读入图像
+        self.getMNIST()
+
+        #- Gabor 参数
+        ksize = (29, 29)
+        Lambda = [1, 2, 3, 4]
+        numTheta = 8
+        Theta = [np.pi / numTheta * i for i in range(numTheta)]
+        Beta = [1]
+        Gamma = [0.5, 1]
+        RI_Part = 'b'
+
+        #- 获取Gabor滤波器组
+        self.Gabor_Filter = Preprocess.Gabor()
+        self.Gabor_Filter.setParam(ksize, Theta, Lambda, Gamma, Beta, RI_Part)
+        #* Gabor滤波器视场总和（用于Siamese输入）
+        self.sumGaborVisionArea = self.Gabor_Filter.sumGaborVisionArea
+
+        #- 图像块定义及参数
+        #* 图像块大小
+        self.ImageBlockSize = (11, 11)
+        #* 采样数
+        self.numSamples = 400000
+        #* 图像块像素总数
+        self.numPixels = self.ImageBlockSize[0] * self.ImageBlockSize[1]
+        #* PCA白化
+        self.Whiten = True
+        
+        #- 其他参数
+        #* 打印Log时的步长
+        self.log_display_num = self.DisplayStepCount()
+        #* ？？？
+        self.numBlocksOfImage = (self.ImageSize[0] - self.ImageBlockSize[0] + 1) * (self.ImageSize[1] - self.ImageBlockSize[1] + 1)
+
+
+    #@ 数据预处理
+    def getMNIST(self):
+        """ 获取MNIST图像
+        """
+        self.Train_X, self.Train_Y, self.Test_X, self.Test_Y = Preprocess.Preprocess_MNIST_Data("./Datasets/MNIST_Data", True, True)
+
+    def GaborMNIST(self, isLoadFile, batchsize=1000, savefile_Train_Gabor='Gabored_MNIST_Images_Train.npy', savefile_Test_Gabor='Gabored_MNIST_Images_Test.npy'):
+        """Gabor MNIST 图像集，全图Gabor
+        
+        Arguments:
+            isLoadFile {bool} -- 是否读取已存在的文件
+        
+        Keyword Arguments:
+            savefile_Train_Gabor {str} -- 训练集Gabor路径 (default: {'Gabored_MNIST_Images_Train.npy'})
+            savefile_Test_Gabor {str} -- 测试集Gabor路径 (default: {'Gabored_MNIST_Images_Test.npy'})
+        
+        Returns:
+            np.array, np.array -- Gabor结果
+        """
+        if isLoadFile==False:
+            self.Train_X_Gabor = Preprocess.GaborAllImages(self.Gabor_Filter, self.Train_X, batchsize=batchsize, isSavingData=savefile_Train_Gabor)
+            self.Test_X_Gabor = Preprocess.GaborAllImages(self.Gabor_Filter, self.Test_X, batchsize=batchsize, isSavingData=savefile_Test_Gabor)
+        else:
+            self.Train_X_Gabor = Preprocess.LoadGaborImages(savefile_Train_Gabor)
+            self.Test_X_Gabor = Preprocess.LoadGaborImages(savefile_Test_Gabor)
+
+    def CaptureBlocks(self, isLoadFile, savefile_ImageBlocks=['ImageBlocks.npy', 'ImageBlocksGabor.npy']):
+        """采样
+        
+        Arguments:
+            isLoadFile {bool} -- 是否读取已存在文件
+        
+        Keyword Arguments:
+            savefile_ImageBlocks {list} -- 保存路径 (default: {['ImageBlocks.npy', 'ImageBlocksGabor.npy']})
+        """
+        if isLoadFile==False:
+            self.Image_Blocks, self.Image_Blocks_Gabor = Preprocess.RandomSamplingImageBlocks(self.Train_X, self.Train_X_Gabor, self.Gabor_Filter, self.ImageBlockSize, self.numSamples, isSavingData=savefile_ImageBlocks, isLog=self.log_display_num)
+        else:
+            self.Image_Blocks, self.Image_Blocks_Gabor = Preprocess.LoadRandomImageBlocks(savefile_ImageBlocks)
+
+        self.Image_Blocks, self.Whiten_Average, self.Whiten_U = Preprocess.PCA_Whiten(self.Image_Blocks, self.Whiten)
+        
+
+    #@ AE网络
+    def EncoderLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """编码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Encoder_Layer') as scope_encoder:
+            weight = tf.get_variable('Encoder_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Encoder_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        encoder_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return encoder_layer
+    
+    def DecoderLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """解码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Decoder_Layer') as scope_decoder:
+            weight = tf.get_variable('Decoder_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Decoder_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        decoder_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return decoder_layer
+    
+    def TiedEncoderDecoderLayer(self, Input_Layer, Input_Size, Hidden_Size, Activation_Encoder, isTrainable=True):
+        """绑定编、解码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Hidden_Size {int} -- 隐含层大小
+            Activation_Encoder {function} -- 编码器激活函数
+            Activation_Decoder {function} -- 解码器激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            tf.tensor, tf.tensor -- 编码层结果，解码层结果
+        """
+        with tf.variable_scope('TiedEncoderDecoder_Layer') as scope:
+            weight = tf.get_variable('Tied_Weight', [Input_Size, Hidden_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias_en = tf.get_variable('Tied_Encoder_Bias', [Hidden_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+            bias_de = tf.get_variable('Tied_Decoder_Bias', [Input_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        encoder_layer = Activation_Encoder(tf.matmul(Input_Layer, weight) + bias_en)
+        decoder_layer = tf.matmul(encoder_layer, tf.transpose(weight)) + bias_de
+        return encoder_layer, decoder_layer
+
+    def SiameseLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """Siamese层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Siamese_Layer') as scope_siamese:
+            weight = tf.get_variable('Siamese_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Siamese_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        siamese_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return siamese_layer
+
+    def Build_TiedAutoEncoderNetwork(self):
+        """带Siamese旁支、绑定权重的AE网络
+        """
+        #* 重建比重
+        reconstruction_reg = 0.5
+        #* 相似度量比重
+        measurement_reg = 0.1
+        #* 稀疏性比重
+        sparse_reg = 0.1
+        #* 高斯噪声
+        gaussian = 0.02
+
+        ############################  初始化参数  ############################
+        training_epochs = 100
+        batch_size = 200
+        total_batch = math.ceil(self.numSamples / batch_size)
+        learning_rate_dacay_init = 1e-2
+        learning_rate_decay_steps = total_batch * 4
+        learning_rate_decay_rates = 0.95
+
+        ############################  初始化网络输入  ############################
+        tf.reset_default_graph()
+        input_Main = tf.placeholder(tf.float32, [None, self.numPixels])
+        input_Siamese = tf.placeholder(tf.float32, [None, self.sumGaborVisionArea])
+        global_step = tf.Variable(0, trainable=False)
+        learning_rate = tf.train.exponential_decay( learning_rate=learning_rate_dacay_init, 
+                                                    global_step=global_step, 
+                                                    decay_steps=learning_rate_decay_steps, 
+                                                    decay_rate=learning_rate_decay_rates)
+ 
+        ############################  构建网络  ############################
+        n_Hiddens = 1024
+        encoder_layer, decoder_layer = self.TiedEncoderDecoderLayer(input_Main, self.numPixels, n_Hiddens, tf.nn.leaky_relu)
+        siamese_layer = self.SiameseLayer(input_Siamese, self.sumGaborVisionArea, n_Hiddens, tf.nn.leaky_relu)
+
+        #* 重建损失
+        loss_reconstruction = tf.reduce_mean(tf.pow(tf.subtract(input_Main, decoder_layer), 2.0))
+        #* 度量损失
+        loss_measurement = tf.reduce_mean(tf.abs(tf.subtract(encoder_layer, siamese_layer)))
+        #* 稀疏性
+        loss_sparse = tf.reduce_mean(tf.abs(siamese_layer))
+        #* 最终损失
+        loss = reconstruction_reg * loss_reconstruction + measurement_reg * loss_measurement + sparse_reg * loss_sparse
+        #* 优化函数
+        # optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+        optimizer = tf.train.AdamOptimizer(learning_rate).minimize(loss, global_step=global_step)
+
+        ############################  初始化参数  ############################
+        display_step = 1
+        saver = tf.train.Saver()
+        model_path = './log/mRAE.ckpt'
+
+        ############################  训练网络  ############################
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            for epoch in range(training_epochs):
+                avg_loss = 0
+                for i in range(total_batch):
+                    #* 提取每个Batch对应的数据
+                    batch_main = self.Image_Blocks[i * batch_size : min((i + 1) * batch_size, self.numSamples), :]
+                    batch_siamese = self.Image_Blocks_Gabor[i * batch_size : min((i + 1) * batch_size, self.numSamples), :]
+                    #* 加入噪声
+                    batch_main_noise = batch_main + gaussian * np.random.randn(min(batch_size, self.numSamples - i * batch_size), self.numPixels)
+                    #* 训练网络
+                    _, ls = sess.run([optimizer, loss], feed_dict={input_Main : batch_main_noise, input_Siamese : batch_siamese})
+                    avg_loss += ls / total_batch
+                    
+                if (epoch + 1) % display_step == 0:
+                    message = "Epoch : " + '%04d' % (epoch + 1) + " loss = " + "{:.9f}".format(avg_loss)
+                    Preprocess.PrintLog(message)
+                    save_path = saver.save(sess, model_path, global_step = epoch)
+
+            print("Finished!")
+            save_path = saver.save(sess, model_path)
+            print("Model saved in file : ", save_path)
+
+    def Build_AutoEncoderNetwork(self):
+        """带Siamese旁支的AE网络
+        """
+        #* 重建比重
+        reconstruction_reg = 0.5
+        #* 相似度量比重
+        measurement_reg = 0.1
+        #* 稀疏性比重
+        sparse_reg = 0.1
+        #* 高斯噪声
+        gaussian = 0.02
+
+        ############################  初始化参数  ############################
+        training_epochs = 100
+        batch_size = 200
+        total_batch = math.ceil(self.numSamples / batch_size)
+        learning_rate_dacay_init = 0.1
+        learning_rate_decay_steps = total_batch * 4
+        learning_rate_decay_rates = 0.98
+
+        ############################  初始化网络输入  ############################
+        tf.reset_default_graph()
+        input_Main = tf.placeholder(tf.float32, [None, self.numPixels])
+        input_Siamese = tf.placeholder(tf.float32, [None, self.sumGaborVisionArea])
+        global_step = tf.Variable(0, trainable=False)
+        learning_rate = tf.train.exponential_decay( learning_rate=learning_rate_dacay_init, 
+                                                    global_step=global_step, 
+                                                    decay_steps=learning_rate_decay_steps, 
+                                                    decay_rate=learning_rate_decay_rates)
+ 
+        ############################  构建网络  ############################
+        n_Hiddens = 1024
+        encoder_layer = self.EncoderLayer(input_Main, self.numPixels, n_Hiddens, tf.nn.leaky_relu)
+        decoder_layer = self.DecoderLayer(encoder_layer, n_Hiddens, self.numPixels, tf.nn.leaky_relu)
+        siamese_layer = self.SiameseLayer(input_Siamese, self.sumGaborVisionArea, n_Hiddens, tf.nn.leaky_relu)
+
+        #* 重建损失
+        loss_reconstruction = tf.reduce_mean(tf.pow(tf.subtract(input_Main, decoder_layer), 2.0))
+        #* 度量损失
+        loss_measurement = tf.reduce_mean(tf.abs(tf.subtract(encoder_layer, siamese_layer)))
+        #* 稀疏性
+        loss_sparse = tf.reduce_mean(tf.abs(siamese_layer))
+        #* 最终损失
+        loss = reconstruction_reg * loss_reconstruction + measurement_reg * loss_measurement + sparse_reg * loss_sparse
+        #* 优化函数
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+
+        ############################  初始化参数  ############################
+        display_step = 1
+        saver = tf.train.Saver()
+        model_path = './log/mRAE.ckpt'
+
+        ############################  训练网络  ############################
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            for epoch in range(training_epochs):
+                avg_loss = 0
+                for i in range(total_batch):
+                    #* 提取每个Batch对应的数据
+                    batch_main = self.Image_Blocks[i * batch_size : min((i + 1) * batch_size, self.numSamples), :]
+                    batch_siamese = self.Image_Blocks_Gabor[i * batch_size : min((i + 1) * batch_size, self.numSamples), :]
+                    #* 加入噪声
+                    batch_main_noise = batch_main + gaussian * np.random.randn(min(batch_size, self.numSamples - i * batch_size), self.numPixels)
+                    #* 训练网络
+                    _, ls = sess.run([optimizer, loss], feed_dict={input_Main : batch_main_noise, input_Siamese : batch_siamese})
+                    avg_loss += ls / total_batch
+                    
+                if (epoch + 1) % display_step == 0:
+                    message = "Epoch : " + '%04d' % (epoch + 1) + " loss = " + "{:.9f}".format(avg_loss)
+                    Preprocess.PrintLog(message)
+                    save_path = saver.save(sess, model_path, global_step = epoch)
+
+            print("Finished!")
+            save_path = saver.save(sess, model_path)
+            print("Model saved in file : ", save_path)
+
+    def Display_TiedReconstruction(self, numImages):
+        """显示重建结果
+        
+        Arguments:
+            numImages {int} -- 重建的图像数量
+        """
+        tf.reset_default_graph()
+
+        ############################  构建网络  ############################
+        n_Hiddens = 1024
+        input_Main = tf.placeholder(tf.float32, [None, self.numPixels])
+        encoder_layer, decoder_layer = self.TiedEncoderDecoderLayer(input_Main, self.numPixels, n_Hiddens, tf.nn.leaky_relu)
+
+        saver = tf.train.Saver()
+        model_path = './log/mRAE.ckpt'
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            saver.restore(sess, model_path)
+
+            batch_xs = self.Image_Blocks[0 : numImages]
+            output_val = sess.run([decoder_layer], feed_dict = {input_Main : batch_xs})
+            
+            batch_xs = np.reshape(batch_xs, [numImages, *self.ImageBlockSize])
+            output_val = np.reshape(output_val, [numImages, *self.ImageBlockSize])
+
+            self.DisplayReconstructionResult(batch_xs, output_val)
+
+    def Display_Reconstruction(self, numImages):
+        """显示重建结果
+        
+        Arguments:
+            numImages {int} -- 重建的图像数量
+        """
+        tf.reset_default_graph()
+
+        ############################  构建网络  ############################
+        n_Hiddens = 1024
+        input_Main = tf.placeholder(tf.float32, [None, self.numPixels])
+        encoder_layer = self.EncoderLayer(input_Main, self.numPixels, n_Hiddens, tf.nn.leaky_relu)
+        decoder_layer = self.DecoderLayer(encoder_layer, n_Hiddens, self.numPixels, tf.nn.leaky_relu)
+
+        saver = tf.train.Saver()
+        model_path = './log/mRAE.ckpt'
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            saver.restore(sess, model_path)
+
+            batch_xs = self.Image_Blocks[0 : numImages]
+            output_val = sess.run([decoder_layer], feed_dict = {input_Main : batch_xs})
+            
+            batch_xs = np.reshape(batch_xs, [numImages, *self.ImageBlockSize])
+            output_val = np.reshape(output_val, [numImages, *self.ImageBlockSize])
+
+            self.DisplayReconstructionResult(batch_xs, output_val)
+
+
+    #@ MLP 分类网络
+    def HiddenFullyConnectedLayer(self, Input_Layer, Input_Size, Output_Size, Activation, Dropout, isTrainable=True):
+        """分类全链接层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('hidden_Layer', reuse=tf.AUTO_REUSE) as scope_hidden:
+            weight = tf.get_variable('Hidden_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Hidden_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        hidden_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        hidden_layer_dropout = tf.nn.dropout(hidden_layer, Dropout)
+        return hidden_layer_dropout
+
+    def SoftmaxClassifyLayer(self, Input_Layer, Input_Size, Output_Size, isTrainable=True):
+        """Softmax分类层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('softmax_Layer', reuse=tf.AUTO_REUSE) as scope_softmax:
+            weight = tf.get_variable('Softmax_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Softmax_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        softmax_layer = tf.nn.softmax(tf.matmul(Input_Layer, weight) + bias)
+        return softmax_layer
+
+    def MLPLayer(self, Input_Layer, Input_Size, Output_Size, isTrainable=True):
+        """MLP分类层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('mlp_Layer', reuse=tf.AUTO_REUSE) as scope_mlp:
+            weight = tf.get_variable('MLP_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('MLP_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        mlp_layer = tf.matmul(Input_Layer, weight) + bias
+        return mlp_layer
+
+    def ExtractEncoderFeature(self, Data, Data_Gabor):
+        #- 初始化参数
+        block_row, block_col = self.ImageBlockSize
+        numData, Data_row, Data_col = Data.shape
+        numRow = Data_row - block_row + 1
+        numCol = Data_col - block_col + 1
+        ksize = [1, numRow // 2, numCol // 2, 1]
+        stride = [1, numRow - numRow // 2, numCol - numCol //2, 1]
+
+        batchsize = 1000
+        totalbatch = math.ceil(numData / batchsize)
+        display_step = 1
+
+        #! 演示分割结果
+        # display_no = 0
+        # self.DisplaySplitResult(Data[display_no], np.reshape(Splited_Data[display_no, :, :], [numRow * numCol, block_row, block_col]), numRow, numCol)
+        
+        #- 提取高维特征并池化，重新组合
+        tf.reset_default_graph()
+        n_Hiddens = 1024
+        # Encodered_Data = np.zeros([numData, 4 * n_Hiddens * 2])
+        Encodered_Data = np.zeros([numData, 4 * n_Hiddens])
+
+        #* 输入
+        input_Main = tf.placeholder(tf.float32, [batchsize, numRow * numCol, self.numPixels])
+        # input_Siamese = tf.placeholder(tf.float32, [batchsize, numRow * numCol, self.sumGaborVisionArea])
+        #* 改变形状，适应批量乘法
+        input_Main_Re = tf.reshape(input_Main, [batchsize * numRow * numCol, self.numPixels])
+        # input_Siamese_Re = tf.reshape(input_Siamese, [batchsize * numRow * numCol, self.sumGaborVisionArea])
+        #* 特征编码
+        # encoder_layer = self.EncoderLayer(input_Main_Re, self.numPixels, n_Hiddens, tf.nn.leaky_relu, False)
+        encoder_layer, _ = self.TiedEncoderDecoderLayer(input_Main_Re, self.numPixels, n_Hiddens, tf.nn.leaky_relu, False)
+        # siamese_layer = self.SiameseLayer(input_Siamese_Re, self.sumGaborVisionArea, n_Hiddens, tf.nn.leaky_relu, False)
+        #* 变换形状
+        # concat_result = tf.concat([encoder_layer, siamese_layer], 1)
+        # concat_result_Re = tf.reshape(concat_result, [batchsize, numRow, numCol, 2 * n_Hiddens])
+        concat_result_Re = tf.reshape(encoder_layer, [batchsize, numRow, numCol, n_Hiddens])
+        #* 均值池化
+        maxpool = tf.nn.avg_pool(concat_result_Re, ksize, stride, 'VALID')
+        #* 变换形状，首尾拼接
+        # reshaped_maxpool = tf.reshape(maxpool, [batchsize, 4 * 2 * n_Hiddens])
+        reshaped_maxpool = tf.reshape(maxpool, [batchsize, 4 * n_Hiddens])
+
+        saver = tf.train.Saver()
+        model_path = './log/mRAE.ckpt'
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            saver.restore(sess, model_path)
+            tsg = self.PrintLog("Extracting High Dimensional Features...")
+            for i in range(totalbatch):
+                Splited_Image, Splited_Image_Gabor = Preprocess.BatchFullySamplingImages(Data[i * batchsize : min((i + 1) * batchsize, numData)],
+                                                                        Data_Gabor[i * batchsize : min((i + 1) * batchsize, numData)],
+                                                                        self.Gabor_Filter,
+                                                                        self.ImageBlockSize,
+                                                                        Whiten=True,
+                                                                        Whiten_Average=self.Whiten_Average,
+                                                                        Whiten_U=self.Whiten_U)
+
+                Encodered_Data[i * batchsize : min((i + 1) * batchsize, numData), :] = sess.run(reshaped_maxpool, feed_dict = {input_Main : Splited_Image})
+                # Encodered_Data[i * batchsize : min((i + 1) * batchsize, numData), :] = sess.run(reshaped_maxpool, feed_dict = {input_Main : Splited_Image, input_Siamese : Splited_Image_Gabor})
+                if (i + 1) % display_step == 0:
+                    message = "Extracting High Dimensional Features : {}/{}".format(min((i + 1) * batchsize, numData), numData)
+                    self.PrintLog(message)
+            self.PrintLog("Extracting High Dimensional Features Done!", tsg)
+
+        return Encodered_Data
+
+    def FeatureReduction(self, Train_X_feature, Test_X_feature):
+        """特征缩减
+        
+        Arguments:
+            Train_X_feature {np.array[numImages, Features]} -- 训练特征
+            Test_X_feature {np.array[numImages, Features]} -- 测试特征
+        
+        Returns:
+            np.array[numImages, SelectedFeatures], np.array[numImages, SelectedFeatures] -- 缩减后的特征
+        """
+        #* 计算标准差
+        train_std = np.std(Train_X_feature, 0)
+        #* 找到方差大于 10^-3 的位置
+        Feature_Position = np.where(train_std > 1e-3)
+        #* 提取出符合条件的方差
+        train_std_Keep = train_std[Feature_Position]
+        #* 提取出符合条件的训练及测试特征
+        train_Keep = Train_X_feature[:, Feature_Position]
+        test_Keep = Test_X_feature[:, Feature_Position]
+        #* 归一化
+        train_Keep_mean = np.mean(train_Keep, 0)
+        train_Keep_Normalized = (train_Keep - train_Keep_mean) / train_std_Keep
+        test_Keep_Normalized = (test_Keep - train_Keep_mean) / train_std_Keep
+        #* 在裁片时，会多一根轴在中央，需要剔除
+        train_Keep_Normalized = np.reshape(train_Keep_Normalized, [train_Keep_Normalized.shape[0], train_Keep_Normalized.shape[1] *  train_Keep_Normalized.shape[2]])
+        test_Keep_Normalized = np.reshape(test_Keep_Normalized, [test_Keep_Normalized.shape[0], test_Keep_Normalized.shape[1] * test_Keep_Normalized.shape[2]])
+        return train_Keep_Normalized, test_Keep_Normalized
+        
+    def generateMRAEFeature(self):
+        """建立分类网络
+        """
+        training_epochs = 500
+        batch_size = 200
+        numTrain = self.Train_X.shape[0]
+        total_batch = math.ceil(numTrain / batch_size)
+        gaussian = 0.02
+        learning_rate_dacay_init = 1e-4
+        learning_rate_decay_steps = total_batch * 2
+        learning_rate_decay_rates = 0.95
+
+        Train_X_feature = self.ExtractEncoderFeature(self.Train_X, self.Train_X_Gabor)
+        del self.Train_X_Gabor
+        gc.collect()
+
+        Test_X_feature = self.ExtractEncoderFeature(self.Test_X, self.Test_X_Gabor)
+        del self.Test_X_Gabor
+        gc.collect()
+
+        self.Train_X_feature, self.Test_X_feature = self.FeatureReduction(Train_X_feature, Test_X_feature)
+
+    @property
+    def MRAETrainFeature(self):
+        return self.Train_X_feature
+
+    @property
+    def MRAETrainLabel(self):
+        return self.Train_Y
+
+    @property
+    def MRAETestFeature(self):
+        return self.Test_X_feature
+
+    @property
+    def MRAETestLabel(self):
+        return self.Test_Y
+
+    @property
+    def MRAEResult(self):
+        return self.Train_X_feature, self.Train_Y, self.Test_X_feature, self.Test_Y
+
+    #@ 附加函数
+    def DisplayStepCount(self):
+        """Log显示的时候步长step
+        
+        Returns:
+            int -- 打Log时，产生的步长
+        """
+        i = 0
+        temp = self.numSamples
+        while temp > 0:
+            i += 1
+            temp = temp // 10
+        return max(1, pow(10, i - 2))
+
+    def DisplayReconstructionResult(self, origin, reconstruction, figure_row=4, figure_col=8):
+        """显示重建前后的图像。 奇数行是原图，偶数行是重建图
+        
+        Arguments:
+            origin {np.array[num, row, col]} -- 源图像，需要进行形状变换
+            reconstruction {np.array[num, row, col]} -- `重建图像，需要进行形状变换`
+        
+        Keyword Arguments:
+            figure_row {int} -- [每一行显示的图像对数] (default: {4})
+            figure_col {int} -- [列数] (default: {8})
+        """
+        
+        figure_size = figure_row * figure_col
+        numImages = origin.shape[0]
+        numFigure = int(numImages / figure_size) + 1
+        image_origin_count = 0
+        image_reconstruction_count = 0
+        Done_flag = False
+
+        for figure_NO in range(numFigure):
+            #! 防止出现空白的 figure
+            if Done_flag == True or image_reconstruction_count == numImages:
+                break
+            #* 绘制新的 figure
+            plt.figure(figure_NO)
+            #* i需要循环 原图，重建图   因此需要乘2
+            for i in range(figure_row * 2):
+                if Done_flag == True:
+                    break
+                for j in range(figure_col):
+                    if image_reconstruction_count == numImages:
+                        Done_flag = True
+                        break
+                    
+                    if i % 2 == 0 and image_origin_count < numImages:
+                        plt.subplot(figure_row * 2, figure_col, i * figure_col + j + 1)
+                        #! 关闭坐标轴
+                        plt.imshow(origin[image_origin_count])
+                        plt.xticks([])
+                        plt.yticks([])
+                        plt.axis('off')
+                        image_origin_count += 1
+                    if i % 2 == 1:
+                        plt.subplot(figure_row * 2, figure_col, i * figure_col + j + 1)
+                        plt.imshow(reconstruction[image_reconstruction_count])
+                        #! 关闭坐标轴
+                        plt.xticks([])
+                        plt.yticks([])
+                        plt.axis('off')
+                        image_reconstruction_count += 1
+
+        plt.show()
+
+    def DisplaySplitResult(self, origin_image, split_image, rows, cols):
+        """显示图像分割结果
+        
+        Arguments:
+            origin_image {np.array} -- 源图像
+            split_image {np.array} -- 分割结果
+            rows {int} -- 分割后的行数
+            cols {int} -- 分割后的列数
+        """
+        plt.figure(0)
+        plt.imshow(origin_image)
+        plt.xticks([])
+        plt.yticks([])
+        plt.axis('off')
+
+        plt.figure(1)
+        for i in range(rows):
+            for j in range(cols):
+                plt.subplot(rows, cols, i * cols + j + 1)
+                plt.imshow(split_image[i * cols + j])
+                plt.xticks([])
+                plt.yticks([])
+                plt.axis('off')
+        plt.show()
+
+    def PrintLog(self, message, diff_logTime=None):
+        """打印Log信息
+        
+        Arguments:
+            message {str} -- 要显示的信息
+        
+        Keyword Arguments:
+            diff_logTime {datetime.datetime} -- 需要计算时间差的变量 (default: {None})
+        
+        Returns:
+            datetime.datetime -- 当前的时间信息
+        """
+        nowTime = datetime.datetime.now()
+        msg = "[" + nowTime.strftime('%Y-%m-%d %H:%M:%S.%f') + "] " + message
+        print(msg)
+
+        if isinstance(diff_logTime, datetime.datetime):
+            diff_time = str((nowTime - diff_logTime).total_seconds())
+            msg = "[" + nowTime.strftime('%Y-%m-%d %H:%M:%S.%f') + "] Time consumption : " + diff_time + ' s'
+            print(msg)
+        
+        return nowTime
 
 #- Gabor网络
 class GaborFeature():
@@ -626,7 +1334,7 @@ def ClassifierKMeansKNN(data, Cluster_Centers = 25, Targeted_Dimension = 2, meth
     # 特征数
     num_features = Train_X.shape[1]
     # 显示步长
-    display_epoch = 5
+    display_epoch = 500
     # 类别数
     n_class = 10
 
@@ -703,9 +1411,33 @@ if __name__ == "__main__":
     # ClassifierSVM(*DAEFeatures.DAEResult)
     # ClassifierMLP(*DAEFeatures.DAEResult)
 
+    MRAEFeatures = MRAEFeature()
+    ClassifierSVM(*MRAEFeatures.MRAEResult)
+    ClassifierMLP(*MRAEFeatures.MRAEResult)
+
     #- Unsupervised Learning
-    GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
-    ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, 32, 1)
+    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
+    # ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, 32, 1)
 
     # DAEFeatures = DAEFeature()
     # ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, 2)
+
+    d_1 = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+    k_1 = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    for d in d_1:
+        print("****************************************")
+        print("d = {} \t k = 25".format(d))
+        ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, d)
+        print("****************************************")
+
+    for k in k_1:
+        print("****************************************")
+        print("d = 16 \t k = {}".format(k))
+        ClassifierKMeansKNN(DAEFeatures.DAEResult, k, 16)
+        print("****************************************")
+
+    for k in k_1:
+        print("****************************************")
+        print("d = 8 \t k = {}".format(k))
+        ClassifierKMeansKNN(DAEFeatures.DAEResult, k, 8)
+        print("****************************************")
