@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-04 10:48:22
+@LastEditTime: 2020-04-04 10:51:38
 @Description: Do not edit
 '''
 
@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 import numpy as np
 import Load_MNIST
+import Preprocess
 import datetime
 import sklearn
 import math
