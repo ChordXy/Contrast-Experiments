@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-04 10:51:38
+@LastEditTime: 2020-04-04 16:06:40
 @Description: Do not edit
 '''
 
@@ -1428,17 +1428,17 @@ if __name__ == "__main__":
     for d in d_1:
         print("****************************************")
         print("d = {} \t k = 25".format(d))
-        ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, d)
+        ClassifierKMeansKNN(MRAEFeatures.MRAEResult, 25, d)
         print("****************************************")
 
     for k in k_1:
         print("****************************************")
         print("d = 16 \t k = {}".format(k))
-        ClassifierKMeansKNN(DAEFeatures.DAEResult, k, 16)
+        ClassifierKMeansKNN(MRAEFeatures.MRAEResult, k, 16)
         print("****************************************")
 
     for k in k_1:
         print("****************************************")
         print("d = 8 \t k = {}".format(k))
-        ClassifierKMeansKNN(DAEFeatures.DAEResult, k, 8)
+        ClassifierKMeansKNN(DAEFeatures.MRAEResult, k, 8)
         print("****************************************")
