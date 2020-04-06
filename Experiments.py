@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-04 16:06:40
+@LastEditTime: 2020-04-06 23:26:28
 @Description: Do not edit
 '''
 
@@ -1305,10 +1305,14 @@ def ClassifierMLP(train_x, train_y, test_x, test_y):
                 PrintLog(message)
         print("Finished!")
         #* 测试集结果
-        print("Testing Accuracy : ", accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.}))
+        acc = accuracy.eval(feed_dict = {input_Feature : test_x, y : test_y, dropout_keep_prob : 1.})
+        print("Testing Accuracy : ", acc)
+        return acc
 
 #- 降维
 def DimensionReduction(data, Targeted_Dimension = 2, method = 0):
+    if data.shape[1] <= Targeted_Dimension:
+        return data
     if method == 0:
         Reduced_Data = PCA(n_components=Targeted_Dimension).fit_transform(data)
     else:
@@ -1338,6 +1342,7 @@ def ClassifierKMeansKNN(data, Cluster_Centers = 25, Targeted_Dimension = 2, meth
     display_epoch = 500
     # 类别数
     n_class = 10
+    acc = 0
 
     ################################### 网络参数 ###################################
     X = tf.placeholder(tf.float32, shape=[None, num_features])
@@ -1369,9 +1374,9 @@ def ClassifierKMeansKNN(data, Cluster_Centers = 25, Targeted_Dimension = 2, meth
         cluster_label = tf.nn.embedding_lookup(labels_map, cluster_idx)
         correct_prediction = tf.equal(cluster_label, tf.cast(tf.argmax(Y, 1), tf.int32))
         accuracy_op = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-
-        print("Test Accuracy:", sess.run(accuracy_op, feed_dict={X: Test_X, Y: Test_Y}))
-
+        acc = sess.run(accuracy_op, feed_dict={X: Test_X, Y: Test_Y})
+        print("Test Accuracy:", acc)
+    return acc
 
 
 #- 测试函数
@@ -1394,6 +1399,15 @@ def TestCluster():
     plt.scatter(X_Reduced[:, 0], X_Reduced[:, 1], marker='o')
     plt.show()
 
+#- 文件函数
+def PrintToFile(results, filename):
+    results = np.transpose(results)
+    with open(filename, "w+") as savefile:
+        for line in results:
+            for res in line:
+                savefile.write("{:.4}\t".format(res))
+            savefile.write('\r\n')
+            
 
 if __name__ == "__main__":
     ksize = (11, 11)
@@ -1402,43 +1416,60 @@ if __name__ == "__main__":
     Theta = [np.pi / numTheta * i for i in range(numTheta)]
     Beta = [1]
     Gamma = [0.5, 1]
+    
+    
+    #- Gabor vs mrDAE - Dimension
+    results = []
+    prs = [2, 4, 7, 10, 14, 18, 22, 28]
+    ds = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+    for ps in prs:
+        res = []
+        GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
+        #* 监督学习
+        res.append(ClassifierSVM(*GaborFeatures.GaborResult))
+        res.append(ClassifierMLP(*GaborFeatures.GaborResult))
+        #* 无监督学习
+        for d in ds:
+            res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, d))
+        results.append(res)
+    PrintToFile(results, "Change of d.txt")
 
-    #- Supervised Learning
-    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
-    # ClassifierSVM(*GaborFeatures.GaborResult)
-    # ClassifierMLP(*GaborFeatures.GaborResult)
-
+    #- Gabor vs mrDAE - Cluster Centers
+    ds = [16, 32, 64]
+    prs = [2, 4, 7, 10, 14, 18, 22, 28]
+    ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    for d in ds:
+        results = []
+        for ps in prs:
+            res = []
+            GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
+            #* 无监督学习
+            for k in ks:
+                res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, k, d))
+            results.append(res)
+        PrintToFile(results, "Change of k (d={}).txt".format(d))
+    
     # DAEFeatures = DAEFeature()
-    # ClassifierSVM(*DAEFeatures.DAEResult)
-    # ClassifierMLP(*DAEFeatures.DAEResult)
 
-    MRAEFeatures = MRAEFeature()
-    ClassifierSVM(*MRAEFeatures.MRAEResult)
-    ClassifierMLP(*MRAEFeatures.MRAEResult)
+    # MRAEFeatures = MRAEFeature()
 
-    #- Unsupervised Learning
-    # GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=4)
-    # ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, 32, 1)
 
-    # DAEFeatures = DAEFeature()
-    # ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, 2)
+    # d_1 = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+    # k_1 = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    # for d in d_1:
+    #     print("****************************************")
+    #     print("d = {} \t k = 25".format(d))
+    #     ClassifierKMeansKNN(MRAEFeatures.MRAEResult, 25, d)
+    #     print("****************************************")
 
-    d_1 = [2, 4, 8, 16, 32, 64, 128, 256, 512]
-    k_1 = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-    for d in d_1:
-        print("****************************************")
-        print("d = {} \t k = 25".format(d))
-        ClassifierKMeansKNN(MRAEFeatures.MRAEResult, 25, d)
-        print("****************************************")
+    # for k in k_1:
+    #     print("****************************************")
+    #     print("d = 16 \t k = {}".format(k))
+    #     ClassifierKMeansKNN(MRAEFeatures.MRAEResult, k, 16)
+    #     print("****************************************")
 
-    for k in k_1:
-        print("****************************************")
-        print("d = 16 \t k = {}".format(k))
-        ClassifierKMeansKNN(MRAEFeatures.MRAEResult, k, 16)
-        print("****************************************")
-
-    for k in k_1:
-        print("****************************************")
-        print("d = 8 \t k = {}".format(k))
-        ClassifierKMeansKNN(DAEFeatures.MRAEResult, k, 8)
-        print("****************************************")
+    # for k in k_1:
+    #     print("****************************************")
+    #     print("d = 8 \t k = {}".format(k))
+    #     ClassifierKMeansKNN(DAEFeatures.MRAEResult, k, 8)
+    #     print("****************************************")
