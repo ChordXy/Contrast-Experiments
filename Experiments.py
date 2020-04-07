@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-06 23:26:28
+@LastEditTime: 2020-04-07 14:42:50
 @Description: Do not edit
 '''
 
@@ -923,7 +923,7 @@ class GaborFeature():
 
         conv = tf.nn.conv2d(input_image, input_filter, [1, 1, 1, 1], method)
         maxpool = tf.nn.max_pool(conv, [1, 28 // self.pool_size, 28 // self.pool_size, 1], [1, 28 // self.pool_size, 28 // self.pool_size, 1], 'VALID')
-        reshaped_maxpool = tf.reshape(maxpool, [batchsize, self.pool_size * self.pool_size * 128])
+        flattened_maxpool = tf.layers.flatten(maxpool)
 
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
@@ -932,8 +932,8 @@ class GaborFeature():
             for i in range(totalbatch):
                 self.PrintLog("Extracting Features... {}/{}".format(min(i * batchsize, numImages), numImages))
 
-                Selected_Images = Images[i * batchsize : min((i + 1) * batchsize, numImages)]
-                result_pool = sess.run(reshaped_maxpool, feed_dict={input_image:Selected_Images, input_filter:self.__Gabor_filter})
+                Selected_Images = Images[i * batchsize : (i + 1) * batchsize]
+                result_pool = sess.run(flattened_maxpool, feed_dict={input_image:Selected_Images, input_filter:self.__Gabor_filter})
                 if i == 0:
                     result = result_pool
                 else:
@@ -1422,6 +1422,7 @@ if __name__ == "__main__":
     results = []
     prs = [2, 4, 7, 10, 14, 18, 22, 28]
     ds = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+
     for ps in prs:
         res = []
         GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
