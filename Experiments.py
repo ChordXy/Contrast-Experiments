@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-04-09 09:20:26
+@LastEditTime: 2020-04-09 09:57:56
 @Description: Do not edit
 '''
 
@@ -1466,14 +1466,14 @@ if __name__ == "__main__":
         res = []
         DAEFeatures = DAEFeature(ps)
         #* 监督学习
-        # res.append(ClassifierSVM(*DAEFeature.DAEResult))
-        # res.append(ClassifierMLP(*DAEFeature.DAEResult))
+        # res.append(ClassifierSVM(*DAEFeatures.DAEResult))
+        # res.append(ClassifierMLP(*DAEFeatures.DAEResult))
         #* 无监督学习
         for d in ds:
             print("************************************************")
             print("  DAE(h = {}) vs mrDAE -- k = [25], d = {} ".format(ps, d))
             print("************************************************")
-            res.append(ClassifierKMeansKNN(DAEFeature.DAEResult, 25, d))
+            res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, d))
         results.append(res)
     PrintToFile(results, "Change of d - DAE.txt")
 
@@ -1491,7 +1491,7 @@ if __name__ == "__main__":
                 print("************************************************")
                 print("  DAE(h = {}) vs mrDAE -- k = {}, d = [{}] ".format(ps, k, d))
                 print("************************************************")
-                res.append(ClassifierKMeansKNN(DAEFeature.DAEResult, k, d))
+                res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, k, d))
             results.append(res)
         PrintToFile(results, "Change of k (d={}) - DAE.txt".format(d))
 
