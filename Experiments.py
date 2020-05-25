@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-05-24 00:12:04
+@LastEditTime: 2020-05-25 16:11:32
 @Description: Do not edit
 '''
 
@@ -1328,10 +1328,13 @@ def ClassifierKMeans(data, n_class = 10):
 #- 无监督学习：k均值GPU
 def ClassifierKMeansKNN(data, Cluster_Centers = 25, Targeted_Dimension = 2, method = 0):
     ################################### 数据降维 ###################################
-    Train_X = DimensionReduction(data[0], Targeted_Dimension, method)
-    Train_Y = data[1]
-    Test_X = DimensionReduction(data[2], Targeted_Dimension, method)
-    Test_Y = data[3]
+    if Targeted_Dimension > 0:
+        Train_X = DimensionReduction(data[0], Targeted_Dimension, method)
+        Train_Y = data[1]
+        Test_X = DimensionReduction(data[2], Targeted_Dimension, method)
+        Test_Y = data[3]
+    else:
+        Train_X, Train_Y, Test_X, Test_Y = data
     ################################### 参数初始化 ###################################
     # 训练次数
     epochs = 300
@@ -1440,61 +1443,52 @@ if __name__ == "__main__":
     # PrintToFile(results, "Change of d - Gabor.txt")
 
     #- Gabor vs mrDAE - Cluster Centers
-    # ds = [16, 32, 64]
-    ds = [128]
-    prs = [2, 4, 7, 10, 14, 18, 22, 28]
-    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-    ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
-    for d in ds:
-        results = []
-        for ps in prs:
-            res = []
-            GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
-            #* 无监督学习
-            for k in ks:
-                print("************************************************")
-                print("  Gabor(s = {}) vs mrDAE -- k = {}, d = [{}] ".format(ps, k, d))
-                print("************************************************")
-                res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, k, d))
-            results.append(res)
-        PrintToFile(results, "Change of k (d={}) - Gabor.txt".format(d))
-    
-    #- DAE vs mrDAE - Dimension
-    # results = []
-    # prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-    # ds = [2, 4, 8, 16, 32, 64, 128, 256, 512]
-
-    # for ps in prs:
-    #     res = []
-    #     DAEFeatures = DAEFeature(ps)
-    #     #* 监督学习
-    #     # res.append(ClassifierSVM(*DAEFeatures.DAEResult))
-    #     # res.append(ClassifierMLP(*DAEFeatures.DAEResult))
-    #     #* 无监督学习
-    #     for d in ds:
-    #         print("************************************************")
-    #         print("  DAE(h = {}) vs mrDAE -- k = [25], d = {} ".format(ps, d))
-    #         print("************************************************")
-    #         res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, 25, d))
-    #     results.append(res)
-    # PrintToFile(results, "Change of d - DAE.txt")
-
-    #- DAE vs mrDAE - Cluster Centers
-    # ds = [16, 32, 64]
-    # prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    #* Gabor
+    # ds = [16, 32, 64, 128]
+    # prs = [2, 4, 7, 10, 14, 18, 22, 28]
+    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
     # for d in ds:
     #     results = []
     #     for ps in prs:
     #         res = []
-    #         DAEFeatures = DAEFeature(ps)
+    #         GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
     #         #* 无监督学习
     #         for k in ks:
     #             print("************************************************")
-    #             print("  DAE(h = {}) vs mrDAE -- k = {}, d = [{}] ".format(ps, k, d))
+    #             print("  Gabor(s = {}) vs mrDAE -- k = {}, d = [{}] ".format(ps, k, d))
     #             print("************************************************")
-    #             res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, k, d))
+    #             res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, k, d))
     #         results.append(res)
-    #     PrintToFile(results, "Change of k (d={}) - DAE.txt".format(d))
+    #     PrintToFile(results, "Change of k (d={}) - Gabor.txt".format(d))
+
+    #* mrDAE
+    # ds = [16, 32, 64, 128]
+    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    # mrDAEFeatures = MRAEFeature()
+    # results = []
+    # for d in ds:
+    #     res = []
+    #     for k in ks:
+    #         print("************************************************")
+    #         print("  Gabor vs mrDAE -- k = {}, d = [{}] ".format(k, d))
+    #         print("************************************************")
+    #         res.append(ClassifierKMeansKNN(mrDAEFeatures.MRAEResult, k, d))
+    #     results.append(res)
+    # PrintToFile(results, "Change of k (d={}) - mrDAE.txt".format(d)) 
+
+    #- DAE vs mrDAE - Cluster Centers
+    prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    results = []
+    for ps in prs:
+        res = []
+        DAEFeatures = DAEFeature(ps)
+        for k in ks:
+            print("************************************************")
+            print("  DAE(h = {}) vs mrDAE -- k = {}".format(ps, k))
+            print("************************************************")
+            res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, k, -1))
+        results.append(res)
+    PrintToFile(results, "Change of k - DAE.txt")
 
 
