@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-05-25 16:11:32
+@LastEditTime: 2020-06-02 10:38:16
 @Description: Do not edit
 '''
 
@@ -1177,6 +1177,244 @@ class DAEFeature():
     def DAEResult(self):
         return self.ae_train_feature, self.Train_Y, self.ae_test_feature, self.Test_Y
 
+#- DAE网络 - Block
+class BlockDAEFeature():
+    def __init__(self, hiddens = 1024):
+        self.nhiddens = hiddens
+        self.getMNIST()
+        self.RandomSamplingImageBlocks((11, 11), 400000)
+        self.TrainDAEFeature()
+        self.generateDAEFeature()
+
+    def EncoderLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """编码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Encoder_Layer') as scope_encoder:
+            weight = tf.get_variable('Encoder_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Encoder_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        encoder_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return encoder_layer
+    
+    def DecoderLayer(self, Input_Layer, Input_Size, Output_Size, Activation, isTrainable=True):
+        """解码层
+        
+        Arguments:
+            Input_Layer {np.array} -- 前序层
+            Input_Size {int} -- 输入大小
+            Output_Size {int} -- 输出大小
+            Activation {function} -- 激活函数
+        
+        Keyword Arguments:
+            isTrainable {bool} -- [是否可训练] (default: {True})
+        
+        Returns:
+            np.array -- 层结果
+        """
+        with tf.variable_scope('Decoder_Layer') as scope_decoder:
+            weight = tf.get_variable('Decoder_Weight', [Input_Size, Output_Size], tf.float32, xavier_initializer(), trainable=isTrainable)
+            bias = tf.get_variable('Decoder_Bias', [Output_Size], tf.float32, tf.zeros_initializer(), trainable=isTrainable)
+        decoder_layer = Activation(tf.matmul(Input_Layer, weight) + bias)
+        return decoder_layer
+
+    def TrainDAEFeature(self):
+        #* 高斯噪声
+        gaussian = 0.02
+        self.numPixels = 11 * 11
+        self.numSamples = self.Train_X_Block.shape[0]
+        ############################  初始化参数  ############################
+        training_epochs = 100
+        batch_size = 1000
+        total_batch = math.ceil(self.numSamples / batch_size)
+        learning_rate_dacay_init = 1e-3
+        learning_rate_decay_steps = total_batch * 4
+        learning_rate_decay_rates = 0.98
+
+        ############################  初始化网络输入  ############################
+        tf.reset_default_graph()
+        input_Main = tf.placeholder(tf.float32, [None, self.numPixels])
+        global_step = tf.Variable(0, trainable=False)
+        learning_rate = tf.train.exponential_decay( learning_rate=learning_rate_dacay_init, 
+                                                    global_step=global_step, 
+                                                    decay_steps=learning_rate_decay_steps, 
+                                                    decay_rate=learning_rate_decay_rates)
+ 
+        ############################  构建网络  ############################
+        n_Hiddens = self.nhiddens
+        encoder_layer = self.EncoderLayer(input_Main, self.numPixels, n_Hiddens, tf.nn.leaky_relu)
+        decoder_layer = self.DecoderLayer(encoder_layer, n_Hiddens, self.numPixels, tf.nn.leaky_relu)
+
+        #* 重建损失
+        loss = tf.reduce_mean(tf.pow(tf.subtract(input_Main, decoder_layer), 2.0))
+
+        #* 优化函数
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss, global_step=global_step)
+
+        ############################  初始化参数  ############################
+        display_step = 5
+        saver = tf.train.Saver()
+        model_path = './log/DAE.ckpt'
+        ############################  训练网络  ############################
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            for epoch in range(training_epochs):
+                avg_loss = 0
+                for i in range(total_batch):
+                    batch_main = self.Train_X_Block[i * batch_size : min((i + 1) * batch_size, self.numSamples), :]
+                    batch_main_noise = batch_main + gaussian * np.random.randn(min(batch_size, self.numSamples - i * batch_size), self.numPixels)
+                    _, ls = sess.run([optimizer, loss], feed_dict={input_Main : batch_main_noise})
+                    avg_loss += ls / total_batch
+                        
+                if (epoch + 1) % display_step == 0:
+                    message = "Epoch : " + '%04d' % (epoch + 1) + " loss = " + "{:.9f}".format(avg_loss)
+                    PrintLog(message)
+            print("Finished!")
+            saver.save(sess, model_path)
+
+    def generateDAEFeature(self):
+        self.Train_X_Encodered = self.ExtractDAEFeature(self.Train_X, (11, 11))
+        self.Test_X_Encodered = self.ExtractDAEFeature(self.Test_X, (11, 11))
+
+    def ExtractDAEFeature(self, Data, BlockSize):
+        block_row, block_col = BlockSize
+        numData, Data_row, Data_col = Data.shape
+        numRow = Data_row - block_row + 1
+        numCol = Data_col - block_col + 1
+        ksize = [1, numRow // 2, numCol // 2, 1]
+        stride = [1, numRow - numRow // 2, numCol - numCol //2, 1]
+
+        batchsize = 1000
+        totalbatch = math.ceil(numData / batchsize)
+        display_step = 1000
+
+        #- 提取高维特征并池化，重新组合
+        tf.reset_default_graph()
+        n_Hiddens = self.nhiddens
+        Encodered_Data = np.zeros([numData, 4 * n_Hiddens])
+
+        #* 输入
+        input_Main = tf.placeholder(tf.float32, [batchsize, numRow * numCol, self.numPixels])
+        #* 改变形状，适应批量乘法
+        input_Main_Re = tf.reshape(input_Main, [batchsize * numRow * numCol, self.numPixels])
+        #* 特征编码
+        encoder_layer = self.EncoderLayer(input_Main_Re, self.numPixels, n_Hiddens, tf.nn.leaky_relu, False)
+        #* 变换形状
+        concat_result_Re = tf.reshape(encoder_layer, [batchsize, numRow, numCol, n_Hiddens])
+        #* 均值池化
+        avgpool = tf.nn.avg_pool(concat_result_Re, ksize, stride, 'VALID')
+        #* 变换形状，首尾拼接
+        reshaped_avgpool = tf.reshape(avgpool, [batchsize, 4 * n_Hiddens])
+
+        saver = tf.train.Saver()
+        model_path = './log/DAE.ckpt'
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            saver.restore(sess, model_path)
+            tsg = PrintLog("Extracting High Dimensional Features...")
+            for i in range(totalbatch):
+                Splited_Image = self.BatchFullySamplingImages(Data[i * batchsize : min((i + 1) * batchsize, numData)], BlockSize)
+                Encodered_Data[i * batchsize : min((i + 1) * batchsize, numData), :] = sess.run(reshaped_avgpool, feed_dict = {input_Main : Splited_Image})
+                
+                if (i + 1) % display_step == 0:
+                    message = "Extracting High Dimensional Features : {}/{}".format(min((i + 1) * batchsize, numData), numData)
+                    PrintLog(message)
+            PrintLog("Extracting High Dimensional Features Done!", tsg)
+        return Encodered_Data
+
+    def getMNIST(self):
+        """ 获取MNIST图像
+        """
+        self.Train_X, self.Train_Y, self.Test_X, self.Test_Y = Load_MNIST.Preprocess_MNIST_Data("./Datasets/MNIST_Data", True, True)
+
+    def RandomSamplingImageBlocks(self, ImageBlockSize, numSample, isLog=5000):
+        tsg = PrintLog("Image Blocks Capturing...")
+
+        #* 参数初始化
+        numImages, image_rows, image_cols = self.Train_X.shape
+        block_rows, block_cols = ImageBlockSize
+        half_block_rows, half_block_cols = block_rows // 2, block_cols // 2
+        #* 预定义返回数组
+        Image_Block = np.zeros([numSample, block_rows, block_cols])
+
+        #* 随机生成选取的图片序号
+        num_CaptureImage = np.random.randint(numImages, size=[numSample])
+        for index, NumberOfBlocks in enumerate(num_CaptureImage):
+            #- 提取原图像
+            #* 获取第n个图片及其Gabor图像
+            Selected_Image = self.Train_X[NumberOfBlocks, :, :]
+            #* 提取合法区域内的图像
+            Image_In_Range = Selected_Image[half_block_rows : image_rows - half_block_rows, half_block_cols : image_cols - half_block_cols]
+            #* 获取合法区域内非零点坐标
+            nonZero_Position = Image_In_Range.nonzero()
+            #* 在合法坐标内随机选择一对坐标
+            Selected_Coordinate = np.random.randint(len(nonZero_Position[0]))
+            #* 获取原图上的坐标
+            Selected_x = nonZero_Position[0][Selected_Coordinate] + half_block_cols
+            Selected_y = nonZero_Position[1][Selected_Coordinate] + half_block_rows
+            #* 截取图像，存入数组
+            Image_Block[index] = Selected_Image[Selected_y - half_block_rows : Selected_y + half_block_rows + 1, Selected_x - half_block_cols: Selected_x + half_block_cols + 1]
+
+            #- 显示日志信息
+            if isLog > 0 and (index + 1) % isLog == 0:
+                message = "Now Capturing Image Blocks and Gabor Images... " + str(index + 1) + '/'+ str(numSample)
+                PrintLog(message)
+
+        #- 调整形状，将Image_Block 从 [numSample, block_rows, block_cols] 转成 [numSample, block_rows * block_cols]
+        self.Train_X_Block = np.reshape(Image_Block, [numSample, block_rows * block_cols])
+
+        PrintLog("Image Blocks and Gabor Images Capturing Done!", tsg)
+
+    def BatchFullySamplingImages(self, Images, ImageBlockSize):
+        block_row, block_col = ImageBlockSize
+        numImages, Image_row, Image_col = Images.shape
+
+        numRow = Image_row - block_row + 1
+        numCol = Image_col - block_col + 1
+
+        Splited_Image = np.zeros([numImages, numRow * numCol, block_row * block_col])
+
+        for i in range(numRow):
+            for j in range(numCol):
+                #- 顺序截取图像块
+                img = Images[:, i : i + block_row, j : j + block_col]
+                Splited_Image[:, i * numCol + j, :] = np.reshape(img, [numImages, block_row * block_col])
+
+        return Splited_Image
+
+
+    @property
+    def DAETrainFeature(self):
+        return self.Train_X_Encodered
+
+    @property
+    def DAETrainLabel(self):
+        return self.Train_Y
+
+    @property
+    def DAETestFeature(self):
+        return self.Test_X_Encodered
+
+    @property
+    def DAETestLabel(self):
+        return self.Test_Y
+
+    @property
+    def DAEResult(self):
+        return self.Train_X_Encodered, self.Train_Y, self.Test_X_Encodered, self.Test_Y
+
+
 #- 监督学习：SVM分类器
 def ClassifierSVM(train_x, train_y, test_x, test_y):
     from sklearn.svm import SVC
@@ -1477,17 +1715,33 @@ if __name__ == "__main__":
     # PrintToFile(results, "Change of k (d={}) - mrDAE.txt".format(d)) 
 
     #- DAE vs mrDAE - Cluster Centers
+    # prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    # results = []
+    # for ps in prs:
+    #     res = []
+    #     DAEFeatures = DAEFeature(ps)
+    #     for k in ks:
+    #         print("************************************************")
+    #         print("  DAE(h = {}) vs mrDAE -- k = {}".format(ps, k))
+    #         print("************************************************")
+    #         res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, k, -1))
+    #     results.append(res)
+    # PrintToFile(results, "Change of k - DAE.txt")
+
+
+    #- DAE-Block vs mrDAE - Cluster Centers
     prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
     ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
     results = []
     for ps in prs:
         res = []
-        DAEFeatures = DAEFeature(ps)
+        Block_DAEFeatures = BlockDAEFeature(ps)
         for k in ks:
             print("************************************************")
             print("  DAE(h = {}) vs mrDAE -- k = {}".format(ps, k))
             print("************************************************")
-            res.append(ClassifierKMeansKNN(DAEFeatures.DAEResult, k, -1))
+            res.append(ClassifierKMeansKNN(Block_DAEFeatures.DAEResult, k, -1))
         results.append(res)
     PrintToFile(results, "Change of k - DAE.txt")
 
