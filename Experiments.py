@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-06-02 10:38:16
+@LastEditTime: 2020-06-06 11:57:12
 @Description: Do not edit
 '''
 
@@ -1264,7 +1264,8 @@ class BlockDAEFeature():
         ############################  初始化参数  ############################
         display_step = 5
         saver = tf.train.Saver()
-        model_path = './log/DAE.ckpt'
+        model_path = './slog/DAE.ckpt'
+
         ############################  训练网络  ############################
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
@@ -1280,7 +1281,7 @@ class BlockDAEFeature():
                     message = "Epoch : " + '%04d' % (epoch + 1) + " loss = " + "{:.9f}".format(avg_loss)
                     PrintLog(message)
             print("Finished!")
-            saver.save(sess, model_path)
+            save_path = saver.save(sess, model_path)
 
     def generateDAEFeature(self):
         self.Train_X_Encodered = self.ExtractDAEFeature(self.Train_X, (11, 11))
@@ -1293,8 +1294,9 @@ class BlockDAEFeature():
         numCol = Data_col - block_col + 1
         ksize = [1, numRow // 2, numCol // 2, 1]
         stride = [1, numRow - numRow // 2, numCol - numCol //2, 1]
+        self.numPixels = 11 * 11
 
-        batchsize = 1000
+        batchsize = 200
         totalbatch = math.ceil(numData / batchsize)
         display_step = 1000
 
@@ -1317,7 +1319,7 @@ class BlockDAEFeature():
         reshaped_avgpool = tf.reshape(avgpool, [batchsize, 4 * n_Hiddens])
 
         saver = tf.train.Saver()
-        model_path = './log/DAE.ckpt'
+        model_path = './slog/DAE.ckpt'
 
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
@@ -1730,19 +1732,34 @@ if __name__ == "__main__":
     # PrintToFile(results, "Change of k - DAE.txt")
 
 
-    #- DAE-Block vs mrDAE - Cluster Centers
+    #- DAE-Block vs mrDAE - Cluster Centers 无监督学习
+    # prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    # results = []
+    # for ps in prs:
+    #     res = []
+    #     Block_DAEFeatures = BlockDAEFeature(ps)
+    #     for k in ks:
+    #         print("************************************************")
+    #         print("  DAE(h = {}) vs mrDAE -- k = {}".format(ps, k))
+    #         print("************************************************")
+    #         res.append(ClassifierKMeansKNN(Block_DAEFeatures.DAEResult, k, -1))
+    #     results.append(res)
+    # PrintToFile(results, "Change of k - Block DAE.txt")
+
+    #- DAE-Block vs mrDAE - Cluster Centers 监督学习
     prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-    ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
     results = []
     for ps in prs:
-        res = []
+        print("************************************************")
+        print("  DAE(h = {}) vs mrDAE -- Supervised".format(ps))
+        print("************************************************")
         Block_DAEFeatures = BlockDAEFeature(ps)
-        for k in ks:
-            print("************************************************")
-            print("  DAE(h = {}) vs mrDAE -- k = {}".format(ps, k))
-            print("************************************************")
-            res.append(ClassifierKMeansKNN(Block_DAEFeatures.DAEResult, k, -1))
-        results.append(res)
-    PrintToFile(results, "Change of k - DAE.txt")
+
+        print("********  DAE(h = {}) vs mrDAE -- MLP  ********".format(ps))
+        results.append(ClassifierMLP(Block_DAEFeatures.DAEResult))
+        print("********  DAE(h = {}) vs mrDAE -- SVM  ********".format(ps))
+        results.append(ClassifierSVM(Block_DAEFeatures.DAEResult))
+    PrintToFile(results, "Change of k - Block DAE - Supervised.txt")
 
 
