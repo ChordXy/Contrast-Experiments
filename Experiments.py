@@ -2,7 +2,7 @@
 @Author: Cabrite
 @Date: 2020-03-28 16:38:00
 @LastEditors: Cabrite
-@LastEditTime: 2020-06-06 11:57:12
+@LastEditTime: 2020-06-21 00:42:48
 @Description: Do not edit
 '''
 
@@ -1663,43 +1663,43 @@ if __name__ == "__main__":
     
     
     #- Gabor vs mrDAE - Dimension
-    # results = []
-    # prs = [2, 4, 7, 10, 14, 18, 22, 28]
-    # ds = [2, 4, 8, 16, 32, 64, 128, 256, 512]
+    results = []
+    prs = [1]
+    ds = [2, 4, 8, 16, 32, 64, 128, 256, 512]
 
-    # for ps in prs:
-    #     res = []
-    #     GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
+    for ps in prs:
+        res = []
+        GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
     #     #* 监督学习
-    #     # res.append(ClassifierSVM(*GaborFeatures.GaborResult))
-    #     # res.append(ClassifierMLP(*GaborFeatures.GaborResult))
+        res.append(ClassifierSVM(*GaborFeatures.GaborResult))
+        res.append(ClassifierMLP(*GaborFeatures.GaborResult))
     #     #* 无监督学习
-    #     for d in ds:
-    #         print("************************************************")
-    #         print("  Gabor(s = {}) vs mrDAE -- k = [25], d = {} ".format(ps, d))
-    #         print("************************************************")
-    #         res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, d))
-    #     results.append(res)
-    # PrintToFile(results, "Change of d - Gabor.txt")
+        for d in ds:
+            print("************************************************")
+            print("  Gabor(s = {}) vs mrDAE -- k = [25], d = {} ".format(ps, d))
+            print("************************************************")
+            res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, 25, d))
+        results.append(res)
+    PrintToFile(results, "Change of d - Gabor.txt")
 
     #- Gabor vs mrDAE - Cluster Centers
     #* Gabor
-    # ds = [16, 32, 64, 128]
-    # prs = [2, 4, 7, 10, 14, 18, 22, 28]
-    # ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
-    # for d in ds:
-    #     results = []
-    #     for ps in prs:
-    #         res = []
-    #         GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
-    #         #* 无监督学习
-    #         for k in ks:
-    #             print("************************************************")
-    #             print("  Gabor(s = {}) vs mrDAE -- k = {}, d = [{}] ".format(ps, k, d))
-    #             print("************************************************")
-    #             res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, k, d))
-    #         results.append(res)
-    #     PrintToFile(results, "Change of k (d={}) - Gabor.txt".format(d))
+    ds = [16, 32, 64, 128]
+    prs = [1]
+    ks = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+    for d in ds:
+        results = []
+        for ps in prs:
+            res = []
+            GaborFeatures = GaborFeature(ksize, Theta, Lambda, Gamma, Beta, 'b', pool_result_size=ps)
+            #* 无监督学习
+            for k in ks:
+                print("************************************************")
+                print("  Gabor(s = {}) vs mrDAE -- k = {}, d = [{}] ".format(ps, k, d))
+                print("************************************************")
+                res.append(ClassifierKMeansKNN(GaborFeatures.GaborResult, k, d))
+            results.append(res)
+        PrintToFile(results, "Change of k (d={}) - Gabor.txt".format(d))
 
     #* mrDAE
     # ds = [16, 32, 64, 128]
@@ -1748,18 +1748,18 @@ if __name__ == "__main__":
     # PrintToFile(results, "Change of k - Block DAE.txt")
 
     #- DAE-Block vs mrDAE - Cluster Centers 监督学习
-    prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
-    results = []
-    for ps in prs:
-        print("************************************************")
-        print("  DAE(h = {}) vs mrDAE -- Supervised".format(ps))
-        print("************************************************")
-        Block_DAEFeatures = BlockDAEFeature(ps)
+    # prs = [32, 64, 128, 256, 512, 1024, 2048, 4096]
+    # results = []
+    # for ps in prs:
+    #     print("************************************************")
+    #     print("  DAE(h = {}) vs mrDAE -- Supervised".format(ps))
+    #     print("************************************************")
+    #     Block_DAEFeatures = BlockDAEFeature(ps)
 
-        print("********  DAE(h = {}) vs mrDAE -- MLP  ********".format(ps))
-        results.append(ClassifierMLP(Block_DAEFeatures.DAEResult))
-        print("********  DAE(h = {}) vs mrDAE -- SVM  ********".format(ps))
-        results.append(ClassifierSVM(Block_DAEFeatures.DAEResult))
-    PrintToFile(results, "Change of k - Block DAE - Supervised.txt")
+    #     print("********  DAE(h = {}) vs mrDAE -- MLP  ********".format(ps))
+    #     results.append(ClassifierMLP(Block_DAEFeatures.DAEResult))
+    #     print("********  DAE(h = {}) vs mrDAE -- SVM  ********".format(ps))
+    #     results.append(ClassifierSVM(Block_DAEFeatures.DAEResult))
+    # PrintToFile(results, "Change of k - Block DAE - Supervised.txt")
 
 
