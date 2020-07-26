@@ -1,15 +1,17 @@
 '''
-@Description: 获取Gabor滤波器
 @Author: Cabrite
-@Date: 2019-12-13 15:45:06
-@LastEditors  : Cabrite
-@LastEditTime : 2020-01-04 19:41:11
+@Date: 2020-07-05 09:45:19
+@LastEditors: Cabrite
+@LastEditTime: 2020-07-17 21:57:24
+@Description: Gabor 濾波器
 '''
-import math
-import datetime
-import numpy as np
-import tensorflow as tf
+
 import matplotlib.pyplot as plt
+import tensorflow as tf
+import numpy as np
+import datetime
+import Loggers
+import math
 
 
 #- 获取Gabor滤波器
@@ -81,6 +83,7 @@ class Gabor():
         self.__Gabor_filter = None
         self.__Gabor_filter_size = []
         self.__Gabor_filter_area = []
+        self.__Gabor_filter_name = []
 
     #- 设置Gabor参数
     def setParam(self, ksize, Sigma, Theta, Lambda, Gamma, Psi = [0], RI_Part = 'r', ktype = np.float64):
@@ -144,6 +147,7 @@ class Gabor():
             lam = pow(2, 0.5 * (1 + lam))
             sig = 1 / np.pi * np.sqrt(np.log(2) / 2) * (pow(2, bd) + 1) / (pow(2, bd) - 1) * lam
             self.__Gabor_params.append([sig, the, lam, gam, 0])
+            self.__Gabor_filter_name.append("σ={} θ={} λ={} γ={}".format(sig, the, lam, gam))
         
         self.GenerateGaborFilter()
 
@@ -154,11 +158,12 @@ class Gabor():
         self.__Gabor_filter = np.zeros([self.numGaborFilters, *self.KernelSize])
         index = 0
         
-        self.PrintLog("Generating Gabor Filters...")
+        Loggers.TFprint.TFprint("Generating Gabor Filters...")
 
         if self.ReturnPart == 'b':
             for sig, the, lam, gam, ps in self.__Gabor_params:
-                gabor_pat_size = int(min(2, round(sig - 0.5)))
+                # 倒金字塔结构
+                gabor_pat_size = 3 - int(np.round((sig / 2 - 0.5) * 3))
                 gabor_pat_area = pow(2 * gabor_pat_size + 1, 2)
                 self.__Gabor_filter_size.append(gabor_pat_size)
                 self.__Gabor_filter_size.append(gabor_pat_size)
@@ -168,7 +173,8 @@ class Gabor():
                 index += 2
         else:
             for sig, the, lam, gam, ps in self.__Gabor_params:
-                gabor_pat_size = int(min(2, round(sig - 0.5)))
+                # 倒金字塔结构
+                gabor_pat_size = 3 - int(np.round((sig / 2 - 0.5) * 3))
                 gabor_pat_area = pow(2 * gabor_pat_size + 1, 2)
                 self.__Gabor_filter_size.append(gabor_pat_size)
                 self.__Gabor_filter_area.append(gabor_pat_area)
@@ -185,23 +191,27 @@ class Gabor():
         #@ 将滤波器个数的轴换到最后，适配TensorFlow中卷积滤波器的格式
         self.__Gabor_filter = self.__Gabor_filter.transpose(1, 2, 3, 0)
 
-        self.PrintLog("Generating Gabor Filters Done!")
+        Loggers.TFprint.TFprint("Generating Gabor Filters Done!")
 
     #- 利用生成的Gabor滤波器卷积图像
-    def ConvoluteImages(self, Images, batchsize=5000, method='SAME'):
+    def ConvoluteImages(self, Images, batchsize=5000, method='SAME', isLogInfo=True):
         """利用生成的Gabor滤波器组对图像进行卷积
         
         Arguments:
             Images {np.array[numImages, rows, cols]} -- 图像
 
         Keyword Arguments:
-            method {str} -- 卷积方法 (default: {True})
+            method {str} -- 卷积方法 (default: {'SAME'})
+            isLogInfo {bool} -- 是否需要进度条 (default: {True})
         
         Returns:
             np.array[numFilter, imageSize] -- 返回滤波后的图像组
         """
         #- 图像数据预处理
         #@ 如果图像是单通道数据，则添加一根轴，表明单通道；多通道则不需要。适配TensorFlow卷积中图像的格式
+        if type(Images)==list:
+            Images = np.array(Images)
+
         if len(Images.shape) == 3:
             Images = Images[:, :, :, np.newaxis]
 
@@ -220,10 +230,12 @@ class Gabor():
         
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
-            tsg = self.PrintLog("Convoluting Images...")
+            if isLogInfo:
+                tsg = Loggers.TFprint.TFprint("Convoluting Images...")
     
             for i in range(totalbatch):
-                self.PrintLog("Convoluting Images... {}/{}".format(min(i * batchsize, numImages), numImages))
+                if isLogInfo:
+                    Loggers.ProcessingBar(i + 1, totalbatch, CompleteLog='')
 
                 Selected_Images = Images[i * batchsize : min((i + 1) * batchsize, numImages)]
                 res = sess.run(conv, feed_dict={input_image:Selected_Images, input_filter:self.__Gabor_filter})
@@ -231,7 +243,8 @@ class Gabor():
                     result = res
                 else:
                     result = np.concatenate((result, res), axis=0)
-            self.PrintLog("Convoluting Images Done!", tsg)
+            if isLogInfo:
+                Loggers.TFprint.TFprint("Convoluting Images Done!", tsg)
 
         return result
 
@@ -279,30 +292,17 @@ class Gabor():
         """
         return sum(self.__Gabor_filter_area)
 
-    #- 附加函数
-    def PrintLog(self, message, diff_logTime=None):
-        """打印Log信息
-        
-        Arguments:
-            message {str} -- 要显示的信息
-        
-        Keyword Arguments:
-            diff_logTime {datetime.datetime} -- 需要计算时间差的变量 (default: {None})
-        
+    @property
+    def GaborFilterName(self, index):
+        """滤波器名称
+
+        Args:
+            index (int): 索引
+
         Returns:
-            datetime.datetime -- 当前的时间信息
+            str: 名称
         """
-        nowTime = datetime.datetime.now()
-        msg = "[" + nowTime.strftime('%Y-%m-%d %H:%M:%S.%f') + "] " + message
-        print(msg)
-
-        if isinstance(diff_logTime, datetime.datetime):
-            diff_time = str((nowTime - diff_logTime).total_seconds())
-            msg = "[" + nowTime.strftime('%Y-%m-%d %H:%M:%S.%f') + "] Time consumption : " + diff_time + ' s'
-            print(msg)
-        
-        return nowTime
-
+        return self.__Gabor_filter_name[index]
 
 #- 附加函数
 def DisplayGaborResult(Gabor_Images, figure_row=8, figure_col=16, cmap='gray'):
@@ -363,17 +363,27 @@ def ShowDifference(kernel_size):
 
 #- 测试函数
 def Test_MNIST(GaborClass):
+    """测试MNIST数据集
+
+    Args:
+        GaborClass (class): Gabor类
+    """
     #! Batchsize = 200 时，总计花费 4288.520412 s。耗时在IO，显存与内存之间数据传输
     #! Batchsize = 5000 时，总计花费 106.699461 s。节约了40倍时间。
     #! Batchsize = 10000 时，显存不足
-    import Load_MNIST
-    Train_X, Train_Y, Test_X, Test_Y = Load_MNIST.Preprocess_MNIST_Data("../Datasets/MNIST_Data", True, True)
-    result = GaborClass.ConvoluteImages(Test_X, batchsize=5000)
+    import Load_Datasets
+    Train_X, Train_Y, Test_X, Test_Y = Load_Datasets.Preprocess_Raw_Data("./Datasets", "MNIST", True, True)
+    result = GaborClass.ConvoluteImages(Test_X[0:15], batchsize=20)
     result = result.transpose(0, 3, 1, 2)
     print(result.shape)
-    DisplayGaborResult(result[0:10])
+    DisplayGaborResult(result[0:2])
 
 def Test_Lena(GaborClass):
+    """测试Lena图像
+
+    Args:
+        GaborClass (class): Gabor滤波器类
+    """
     import cv2
     img = cv2.imread('./Images/Lena.jpg', 0)
     cv2.imshow('img', img)
